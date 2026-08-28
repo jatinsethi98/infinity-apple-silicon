@@ -43,47 +43,52 @@ Homebrew FAISS would inflate Infinity's result. **Decision: adopt the from-sourc
 FAISS as the headline baseline** (faster ⇒ conservative), and both numbers are reported here
 so the choice is auditable. This matches the historical ~294 ms Accelerate figure.
 
-## Task 2 — SIFT1M build baseline (equal parameters)
-SIFT1M base vectors, M=32, efConstruction=200, 12 threads, chunk=8192, query-count=1000,
-build-grain=1, 3 alternating pairs. FAISS = Accelerate build.
+## Task 2 — SIFT1M build baseline
+SIFT1M base vectors, M=32, 12 threads, chunk=8192, query-count=1000, build-grain=1,
+2-3 alternating pairs per point. FAISS = from-source Accelerate build.
 
-| n | engine | median build | min–max | rel MAD | vectors/sec | directed edges | L0 cap / upper cap |
-|---:|---|---:|---:|---:|---:|---:|:--:|
-| **1,000,000** | Infinity | **49.038 s** | 47.868–53.201 | 2.4% | 20,392 | 30,075,721 | 64 / 32 |
-| **1,000,000** | FAISS | 64.385 s | 58.016–64.545 | 0.2% | 15,531 | 30,686,543 | 64 / 32 |
-| 200,000 | Infinity | **6.133 s** | 6.055–6.219 | 1.3% | 32,611 | 5,544,122 | 64 / 32 |
-| 200,000 | FAISS | 6.648 s | 6.595–6.732 | 0.8% | 30,084 | 5,639,981 | 64 / 32 |
+| efConstruction | Infinity median | FAISS median | ratio Inf/FAISS | Infinity rel MAD | FAISS rel MAD | recall verdict at matched efSearch |
+|---:|---:|---:|---:|---:|---:|---|
+| 200 | **49.038 s** | 64.385 s | **0.762x** | 2.4% | 0.2% | Infinity LOWER (-0.020 @ef64, -0.034 @ef128) |
+| 225 | 66.210 s | 80.183 s | 0.826x | 1.7% | 0.1% | mixed (+0.006 @ef64, -0.012 @ef128) |
+| 250 | 75.834 s | 85.600 s | 0.886x | 5.2% | 0.6% | Infinity HIGHER at every ef (+0.008 .. +0.031) |
+| 300 | 94.508 s | 104.270 s | 0.906x | 0.5% | 4.0% | Infinity HIGHER at every ef (+0.010 .. +0.029) |
 
-Equal-parameter build-time ratio Infinity/FAISS: **0.762× at 1M**, **0.923× at 200k**
-(<1 = Infinity faster). Edge deficit (Infinity vs FAISS): 1.99% at 1M, 1.70% at 200k —
-much smaller than the ~7.2% seen at 12k (the deficit shrinks with scale).
+Ratio < 1 means Infinity builds faster. **At equal parameters Infinity builds
+1.10x-1.31x faster than FAISS at 1M scale**, and the margin narrows as
+efConstruction rises. A 200,000-vector point gives 6.133 s vs 6.648 s (0.923x).
 
-**recall@10 (median), and why the equal-param ratio is NOT the headline:**
+Directed-edge deficit (Infinity vs FAISS) at efC=200: 30,075,721 vs 30,686,543 =
+**1.99% at 1M**, 1.70% at 200k -- far smaller than the 7.2% seen at 12k, because
+reciprocal back-edges have more opportunity to fill in at scale.
 
-| efSearch | 1M FAISS | 1M Infinity | 1M deficit (F−I) | 200k FAISS | 200k Infinity | 200k deficit |
-|---:|---:|---:|---:|---:|---:|---:|
-| 32  | 0.7625 | 0.7625 | +0.0000 | 0.9109 | 0.9313 | −0.0203 |
-| 64  | 0.8281 | 0.8078 | **+0.0203** | 0.9375 | 0.9563 | −0.0188 |
-| 128 | 0.8672 | 0.8328 | **+0.0344** | 0.9625 | 0.9797 | −0.0172 |
-| 256 | 0.9031 | 0.8906 | +0.0125 | 0.9922 | 0.9969 | −0.0047 |
-| 512 | 0.9547 | 0.9453 | +0.0094 | 1.0000 | 0.9984 | +0.0016 |
-
-At 1M, Infinity trails FAISS recall (positive deficit) — a faster build at lower recall is
-not a win, so the 0.762× ratio is flagged RECALL-UNMATCHED. At 200k the sign **flips**:
-Infinity meets or beats FAISS at ef≤256. That flip across scales, within a 64-query
-estimate, is why iso-recall (below) is the honest headline.
+**Scale dependence matters more than anything else here.** Infinity is *slower*
+than FAISS at 12,288 vectors (~1.5x) and *faster* at 200k and 1M. Fixed setup
+cost dominates at tiny N. The prior effort's headline "0.902x FAISS" was measured
+at 12,288 vectors -- 1.2% of SIFT1M -- which is why it concluded Infinity was
+behind. Always quote N.
 
 ## Task 3 — iso-recall comparison (the honest headline)
-Fix FAISS at efC=200 (recall@10 ef64=0.8281, ef128=0.8672); raise Infinity's efC until its
-recall@10 at **both** ef64 and ef128 ≥ FAISS's, then compare build time at that point.
+Infinity gives a new node a forward-edge budget of M at every layer; FAISS gives
+2*M at level 0 (see the convention note in README.md). Infinity therefore builds a
+sparser graph, so **comparing build time at equal efConstruction is not
+apples-to-apples.** Fix FAISS at efC=200 and raise Infinity's efC until its
+recall@10 meets FAISS's at the same efSearch:
 
-- At **200k**, no efC bump is needed: Infinity already exceeds FAISS at ef64/ef128 at
-  efC=200, so the iso-recall ratio ≈ the equal-param **0.923×** (Infinity faster *and* at
-  equal-or-higher recall).
-- At **1M** (real scale, the hard case where Infinity is recall-disadvantaged):
+| point | Infinity build | vs FAISS@200 (64.385 s) | recall@10 ef64 | ef128 | meets FAISS@200 (0.8281 / 0.8672)? |
+|---|---:|---:|---:|---:|:--|
+| Infinity efC=200 | 49.038 s | 0.762x | 0.8078 | 0.8328 | no (short at both) |
+| Infinity efC=225 | 66.210 s | **1.028x** | 0.8320 | 0.8539 | ef64 yes, ef128 short by 0.013 |
+| Infinity efC=250 | 75.834 s | **1.178x** | 0.8531 | 0.8781 | **yes at every efSearch** |
 
-<!-- ISO_RECALL_1M -->
-_(1M iso-recall sweep in progress — table filled on completion.)_
+**Iso-recall result: Infinity is between 1.03x and 1.18x SLOWER than FAISS at
+matched recall** -- effectively at parity, bracketed by the last point that misses
+recall parity and the first that achieves it. The 64-query recall estimate
+(~0.0016 granularity, larger sampling noise) does not support a tighter claim; a
+10,000-query recall harness would.
+
+This is the number to beat. Reaching the project's >=1.5x goal requires roughly a
+1.6x-1.8x improvement in Infinity's index-build throughput from here.
 
 ## Reproduce every number (one command each)
 ```bash
@@ -122,9 +127,13 @@ The 200k dataset is the first 102,400,000 bytes (200,000×128 f32) of SIFT1M `ba
 - **Build-time measurement asymmetry:** Infinity's `cold_build_ns` includes its thread-pool
   ctor + index allocation; FAISS's includes the `IndexHNSWFlat` ctor + `add()`. Both exclude
   the audit/query phases. The gap is negligible vs a multi-second build.
-- **Harness CLI carries attestation cruft:** the in-repo binaries require a 17-arg protocol and
-  self-`SIGSTOP` at barriers; `scripts/bench/campaign.py` is the minimal shim that drives them.
-  Timing is unaffected (barriers bracket, but sit outside, the timed region). If the toolchain
-  agent lands clean 11-arg binaries, the shim can be dropped without changing any number.
-- **Scale dependence:** Infinity is *slower* than FAISS at 12k (1.54×), *faster* at 200k
-  (0.923×) and 1M (0.762×) — fixed setup cost dominates at tiny N. Quote numbers with their N.
+- **Harness CLI:** the campaign binding is now optional -- current binaries accept a plain 11-arg
+  invocation and no longer suspend themselves, so `run_baseline.py` drives them under a bare
+  subprocess and only falls back to `campaign.py` for older prebuilt binaries. Verified identical
+  results in both modes (same graph sha256).
+- **Scale dependence:** see Task 2. Never quote a ratio without its N.
+- **Iso-recall is bracketed, not pinned.** The 64-query recall audit is too coarse to locate the
+  exact efConstruction where Infinity meets FAISS's recall. Wiring the official SIFT1M 10,000-query
+  set and provided groundtruth (already downloaded to datasets/sift1m/query.f32 and
+  groundtruth.i32, but not yet used by the harness) is the single highest-value improvement to
+  this mechanism.
