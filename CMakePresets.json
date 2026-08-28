@@ -1,0 +1,80 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "macos-arm64-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "/opt/homebrew/opt/llvm@20/bin/clang++",
+        "CMAKE_C_COMPILER": "/opt/homebrew/opt/llvm@20/bin/clang",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ENABLE_JEMALLOC": "OFF",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/ports"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "environment": {
+        "SDKROOT": "$penv{SDKROOT}"
+      },
+      "warnings": {
+        "dev": false
+      }
+    },
+    {
+      "name": "macos-arm64-release",
+      "displayName": "macOS arm64 Release (full server)",
+      "description": "Native Apple Silicon build of the Infinity server. Requires VCPKG_ROOT to point at a bootstrapped vcpkg checkout.",
+      "inherits": "macos-arm64-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "macos-arm64-debug",
+      "displayName": "macOS arm64 Debug (full server)",
+      "inherits": "macos-arm64-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "macos-arm64-release",
+      "configurePreset": "macos-arm64-release",
+      "targets": [
+        "infinity"
+      ]
+    },
+    {
+      "name": "macos-arm64-debug",
+      "configurePreset": "macos-arm64-debug",
+      "targets": [
+        "infinity"
+      ]
+    },
+    {
+      "name": "macos-arm64-test",
+      "configurePreset": "macos-arm64-debug",
+      "targets": [
+        "test_main"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "bench",
+      "displayName": "macOS arm64 Release - Infinity vs FAISS HNSW benchmark",
+      "description": "Standalone project: builds infinity_hnsw_d0 and faiss_hnsw_d0 from Infinity's HNSW + SIMD sources. Does not build the server and needs no vcpkg toolchain - only the ctpl header from vcpkg_installed and Homebrew FAISS 1.15.0.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../../../build/bench",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "/opt/homebrew/opt/llvm@20/bin/clang++",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "INFINITY_NATIVE_CTPL_INCLUDE_DIR": "${sourceDir}/../../../vcpkg_installed/arm64-osx/include",
+        "INFINITY_NATIVE_SMOKE_WITH_FAISS": "ON",
+        "FAISS_INCLUDE_DIR": "/opt/homebrew/opt/faiss/include",
+        "FAISS_LIBRARY": "/opt/homebrew/opt/faiss/lib/libfaiss.dylib"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "warnings": { "dev": false }
+    }
+  ],
+  "buildPresets": [
+    { "name": "bench", "configurePreset": "bench", "targets": ["infinity_hnsw_d0", "faiss_hnsw_d0"] }
+  ]
+}
