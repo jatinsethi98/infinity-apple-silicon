@@ -1,0 +1,1294 @@
+{
+  "schema": 1,
+  "input": "/private/tmp/infinity-current-code-hnsw-sidecar-profile-v1/infinity-current-profile.sample.txt",
+  "methodology": {
+    "filter": "Only subtrees rooted at the 12 std::__packaged_task_func frames whose symbols contain HnswRunBuildTasks.",
+    "exclusive": "For each node, inclusive count minus direct-child counts; terminal counts sum exactly to each task-root count.",
+    "inclusive": "For each terminal stack, samples are added once per distinct canonical symbol on that path, preventing recursive-frame double counting.",
+    "occupancy": "sum(worker task-root samples) / (12 * max worker task-root samples); this is sampled active-stack occupancy, not hardware CPU utilization."
+  },
+  "validation": {
+    "call_graph_roots": 13,
+    "call_graph_nodes": 1911,
+    "task_roots": 12,
+    "task_threads": 12,
+    "negative_exclusive_nodes": 0,
+    "terminal_samples": 55364,
+    "terminal_matches_task_root_sum": true
+  },
+  "worker_occupancy": {
+    "task_active_sample_observations": 55364,
+    "worker_count": 12,
+    "minimum_active_samples": 3354,
+    "maximum_active_samples": 6222,
+    "mean_active_samples": 4613.666666666667,
+    "minimum_to_maximum_ratio": 0.5390549662487946,
+    "sample_window_active_stack_occupancy": 0.7415086253080467,
+    "tail_capacity_sample_observations": 19300,
+    "workers": [
+      {
+        "worker_ordinal_by_sample_thread_order": 0,
+        "thread": "Thread_49854945",
+        "thread_line": 159,
+        "task_root_line": 169,
+        "active_samples": 3386,
+        "percent_of_longest_worker": 54.419800707168115,
+        "tail_inactive_samples_vs_longest": 2836
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 1,
+        "thread": "Thread_49854946",
+        "thread_line": 289,
+        "task_root_line": 299,
+        "active_samples": 3354,
+        "percent_of_longest_worker": 53.90549662487946,
+        "tail_inactive_samples_vs_longest": 2868
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 2,
+        "thread": "Thread_49854947",
+        "thread_line": 425,
+        "task_root_line": 435,
+        "active_samples": 3385,
+        "percent_of_longest_worker": 54.403728704596595,
+        "tail_inactive_samples_vs_longest": 2837
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 3,
+        "thread": "Thread_49854948",
+        "thread_line": 565,
+        "task_root_line": 575,
+        "active_samples": 3726,
+        "percent_of_longest_worker": 59.884281581485055,
+        "tail_inactive_samples_vs_longest": 2496
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 4,
+        "thread": "Thread_49854949",
+        "thread_line": 714,
+        "task_root_line": 724,
+        "active_samples": 4353,
+        "percent_of_longest_worker": 69.96142719382836,
+        "tail_inactive_samples_vs_longest": 1869
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 5,
+        "thread": "Thread_49854950",
+        "thread_line": 875,
+        "task_root_line": 885,
+        "active_samples": 4546,
+        "percent_of_longest_worker": 73.0633236901318,
+        "tail_inactive_samples_vs_longest": 1676
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 6,
+        "thread": "Thread_49854951",
+        "thread_line": 1021,
+        "task_root_line": 1031,
+        "active_samples": 4797,
+        "percent_of_longest_worker": 77.09739633558341,
+        "tail_inactive_samples_vs_longest": 1425
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 7,
+        "thread": "Thread_49854952",
+        "thread_line": 1181,
+        "task_root_line": 1191,
+        "active_samples": 5065,
+        "percent_of_longest_worker": 81.40469302475088,
+        "tail_inactive_samples_vs_longest": 1157
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 8,
+        "thread": "Thread_49854953",
+        "thread_line": 1345,
+        "task_root_line": 1355,
+        "active_samples": 5208,
+        "percent_of_longest_worker": 83.7029893924783,
+        "tail_inactive_samples_vs_longest": 1014
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 9,
+        "thread": "Thread_49854954",
+        "thread_line": 1483,
+        "task_root_line": 1493,
+        "active_samples": 5479,
+        "percent_of_longest_worker": 88.05850208936033,
+        "tail_inactive_samples_vs_longest": 743
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 10,
+        "thread": "Thread_49854955",
+        "thread_line": 1627,
+        "task_root_line": 1637,
+        "active_samples": 5843,
+        "percent_of_longest_worker": 93.90871102539377,
+        "tail_inactive_samples_vs_longest": 379
+      },
+      {
+        "worker_ordinal_by_sample_thread_order": 11,
+        "thread": "Thread_49854956",
+        "thread_line": 1784,
+        "task_root_line": 1794,
+        "active_samples": 6222,
+        "percent_of_longest_worker": 100.0,
+        "tail_inactive_samples_vs_longest": 0
+      }
+    ]
+  },
+  "phase_exclusive_samples": [
+    {
+      "phase": "construction_graph_traversal",
+      "samples": 36774,
+      "percent_of_task_active_samples": 66.42222382775812
+    },
+    {
+      "phase": "reciprocal_connect_and_prune",
+      "samples": 16691,
+      "percent_of_task_active_samples": 30.147749440069358
+    },
+    {
+      "phase": "new_node_neighbor_selection",
+      "samples": 1350,
+      "percent_of_task_active_samples": 2.4384076295065387
+    },
+    {
+      "phase": "upper_layer_entry_search",
+      "samples": 463,
+      "percent_of_task_active_samples": 0.8362835055270573
+    },
+    {
+      "phase": "build_locked_other",
+      "samples": 50,
+      "percent_of_task_active_samples": 0.09031139368542736
+    },
+    {
+      "phase": "build_wrapper_other",
+      "samples": 36,
+      "percent_of_task_active_samples": 0.06502420345350769
+    }
+  ],
+  "distance_kernel_samples_by_phase": {
+    "construction_graph_traversal": {
+      "batch4": {
+        "samples": 19954,
+        "percent_of_task_active_samples": 36.04147099198035
+      },
+      "scalar": {
+        "samples": 920,
+        "percent_of_task_active_samples": 1.6617296438118634
+      }
+    },
+    "new_node_neighbor_selection": {
+      "scalar": {
+        "samples": 919,
+        "percent_of_task_active_samples": 1.6599234159381548
+      }
+    },
+    "reciprocal_connect_and_prune": {
+      "batch4": {
+        "samples": 14181,
+        "percent_of_task_active_samples": 25.614117477060905
+      },
+      "scalar": {
+        "samples": 723,
+        "percent_of_task_active_samples": 1.3059027526912794
+      }
+    },
+    "upper_layer_entry_search": {
+      "scalar": {
+        "samples": 404,
+        "percent_of_task_active_samples": 0.729716060978253
+      }
+    }
+  },
+  "stack_categories": [
+    {
+      "category": "batch4_distance",
+      "samples": 34135,
+      "percent_of_task_active_samples": 61.655588469041255
+    },
+    {
+      "category": "scalar_distance",
+      "samples": 2966,
+      "percent_of_task_active_samples": 5.357271873419551
+    },
+    {
+      "category": "heap_result_handler",
+      "samples": 1588,
+      "percent_of_task_active_samples": 2.868289863449173
+    },
+    {
+      "category": "lock_path",
+      "samples": 1431,
+      "percent_of_task_active_samples": 2.5847120872769307
+    },
+    {
+      "category": "blocked_lock_wait",
+      "samples": 1097,
+      "percent_of_task_active_samples": 1.981431977458276
+    },
+    {
+      "category": "prefetch",
+      "samples": 542,
+      "percent_of_task_active_samples": 0.9789755075500325
+    },
+    {
+      "category": "allocator_path",
+      "samples": 217,
+      "percent_of_task_active_samples": 0.3919514485947547
+    },
+    {
+      "category": "visited_bitmap_initialization",
+      "samples": 25,
+      "percent_of_task_active_samples": 0.04515569684271368
+    }
+  ],
+  "top_exclusive_symbols": [
+    {
+      "symbol": "infinity::F32L2SSEBatch4@infinity_core(float const*, float const*, float const*, float const*, float const*, unsigned long, float*)",
+      "samples": 34135,
+      "percent_of_task_active_samples": 61.655588469041255
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SearchLayer<true, std::nullopt_t, (infinity::LogicalType@logical_type)0, void>(int, float const* const&, int, int, unsigned long, T0 const&) const",
+      "samples": 12465,
+      "percent_of_task_active_samples": 22.51463044577704
+    },
+    {
+      "symbol": "infinity::F32L2SSE@infinity_core(float const*, float const*, unsigned long)",
+      "samples": 2966,
+      "percent_of_task_active_samples": 5.357271873419551
+    },
+    {
+      "symbol": "infinity::HeapResultHandler@infinity_core<infinity::CompareMax@infinity_core<float, int>>::AddResult(unsigned long, float, int)",
+      "samples": 1588,
+      "percent_of_task_active_samples": 2.868289863449173
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SelectNeighborsHeuristic<true>(std::vector<std::pair<float, int>>, unsigned long, int*, int*) const",
+      "samples": 1341,
+      "percent_of_task_active_samples": 2.4221515786431618
+    },
+    {
+      "symbol": "__psynch_cvwait",
+      "samples": 1067,
+      "percent_of_task_active_samples": 1.9272451412470197
+    },
+    {
+      "symbol": "infinity::SIMDPrefetch(void const*)",
+      "samples": 542,
+      "percent_of_task_active_samples": 0.9789755075500325
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SelectNeighborsHeuristic<false>(std::vector<std::pair<float, int>>, unsigned long, int*, int*) const",
+      "samples": 431,
+      "percent_of_task_active_samples": 0.7784842135683838
+    },
+    {
+      "symbol": "pthread_mutex_unlock",
+      "samples": 108,
+      "percent_of_task_active_samples": 0.1950726103605231
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::ConnectNeighbors(int, int const*, int, int)",
+      "samples": 93,
+      "percent_of_task_active_samples": 0.16797919225489488
+    },
+    {
+      "symbol": "pthread_mutex_lock",
+      "samples": 75,
+      "percent_of_task_active_samples": 0.13546709052814104
+    },
+    {
+      "symbol": "_xzm_xzone_malloc_tiny",
+      "samples": 68,
+      "percent_of_task_active_samples": 0.1228234954121812
+    },
+    {
+      "symbol": "_platform_memset",
+      "samples": 48,
+      "percent_of_task_active_samples": 0.08669893793801026
+    },
+    {
+      "symbol": "_platform_memmove",
+      "samples": 42,
+      "percent_of_task_active_samples": 0.07586157069575898
+    },
+    {
+      "symbol": "__psynch_mutexwait",
+      "samples": 29,
+      "percent_of_task_active_samples": 0.05238060833754787
+    },
+    {
+      "symbol": "mach_absolute_time",
+      "samples": 29,
+      "percent_of_task_active_samples": 0.05238060833754787
+    },
+    {
+      "symbol": "_xzm_free",
+      "samples": 28,
+      "percent_of_task_active_samples": 0.050574380463839316
+    },
+    {
+      "symbol": "__psynch_cvbroad",
+      "samples": 27,
+      "percent_of_task_active_samples": 0.04876815259013077
+    },
+    {
+      "symbol": "std::mutex::unlock()",
+      "samples": 26,
+      "percent_of_task_active_samples": 0.04696192471642222
+    },
+    {
+      "symbol": "std::__shared_mutex_base::lock_shared()",
+      "samples": 20,
+      "percent_of_task_active_samples": 0.03612455747417094
+    },
+    {
+      "symbol": "std::mutex::lock()",
+      "samples": 18,
+      "percent_of_task_active_samples": 0.032512101726753846
+    },
+    {
+      "symbol": "std::__shared_mutex_base::unlock_shared()",
+      "samples": 17,
+      "percent_of_task_active_samples": 0.0307058738530453
+    },
+    {
+      "symbol": "DYLD-STUB$$pthread_mutex_lock",
+      "samples": 16,
+      "percent_of_task_active_samples": 0.028899645979336752
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SearchLayerNearest<true>(int, float const* const&, int, int) const",
+      "samples": 14,
+      "percent_of_task_active_samples": 0.025287190231919658
+    },
+    {
+      "symbol": "DYLD-STUB$$pthread_mutex_unlock",
+      "samples": 13,
+      "percent_of_task_active_samples": 0.02348096235821111
+    },
+    {
+      "symbol": "<deduplicated_symbol>",
+      "samples": 13,
+      "percent_of_task_active_samples": 0.02348096235821111
+    },
+    {
+      "symbol": "_xzm_xzone_malloc_small_freelist",
+      "samples": 12,
+      "percent_of_task_active_samples": 0.021674734484502564
+    },
+    {
+      "symbol": "pthread_cond_broadcast",
+      "samples": 10,
+      "percent_of_task_active_samples": 0.01806227873708547
+    },
+    {
+      "symbol": "_pthread_mutex_check_init_slow",
+      "samples": 9,
+      "percent_of_task_active_samples": 0.016256050863376923
+    },
+    {
+      "symbol": "std::__shared_mutex_base::unlock()",
+      "samples": 8,
+      "percent_of_task_active_samples": 0.014449822989668376
+    }
+  ],
+  "top_inclusive_symbols_deduplicated_per_stack": [
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::BuildWithOperationLockHeld(int, int)",
+      "samples": 55364,
+      "percent_of_task_active_samples": 100.0
+    },
+    {
+      "symbol": "std::__packaged_task_func<unsigned long infinity::HnswRunBuildTasks@infinity_core<ctpl::thread_pool, infinity::HnswBulkBuildResult@infinity_core infinity::HnswBulkBuildRun@infinity_core<infinity::HnswHeldLockOperations@infinity_core, std::unique_ptr<infinity::KnnHnsw@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>>, infinity::DenseVectorIter@infinity_core<float, int>, infinity::HnswInsertConfig@infinity_core, ctpl::thread_pool>(std::unique_ptr<infinity::KnnHnsw@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>>&, infinity::DenseVectorIter@infinity_core<float, int>&&, infinity::HnswInsertConfig@infinity_core const&, ctpl::thread_pool&, unsigned long)::'lambda'(unsigned long), infinity::HnswBulkBuildResult@infinity_core infinity::HnswBulkBuildRun@infinity_core<infinity::HnswHeldLockOperations@infinity_core, std::unique_ptr<infinity::KnnHnsw@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>>, infinity::DenseVectorIter@infinity_core<float, int>, infinity::HnswInsertConfig@infinity_core, ctpl::thread_pool>(std::unique_ptr<infinity::KnnHnsw@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>>&, infinity::DenseVectorIter@infinity_core<float, int>&&, infinity::HnswInsertConfig@infinity_core const&, ctpl::thread_pool&, unsigned long)::'lambda'()>(ctpl::thread_pool&, unsigned long, unsigned long, unsigned long, std::unique_ptr<infinity::KnnHnsw@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>>, infinity::DenseVectorIter@infinity_core<float, int>)::'lambda'(int), void (int)>::operator()(int&&)",
+      "samples": 55364,
+      "percent_of_task_active_samples": 100.0
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::BuildLocked(int, int)",
+      "samples": 55328,
+      "percent_of_task_active_samples": 99.9349757965465
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SearchLayer<true, std::nullopt_t, (infinity::LogicalType@logical_type)0, void>(int, float const* const&, int, int, unsigned long, T0 const&) const",
+      "samples": 36774,
+      "percent_of_task_active_samples": 66.42222382775812
+    },
+    {
+      "symbol": "infinity::F32L2SSEBatch4@infinity_core(float const*, float const*, float const*, float const*, float const*, unsigned long, float*)",
+      "samples": 34135,
+      "percent_of_task_active_samples": 61.655588469041255
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::ConnectNeighbors(int, int const*, int, int)",
+      "samples": 16691,
+      "percent_of_task_active_samples": 30.147749440069358
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SelectNeighborsHeuristic<true>(std::vector<std::pair<float, int>>, unsigned long, int*, int*) const",
+      "samples": 14446,
+      "percent_of_task_active_samples": 26.09276786359367
+    },
+    {
+      "symbol": "infinity::F32L2SSE@infinity_core(float const*, float const*, unsigned long)",
+      "samples": 2966,
+      "percent_of_task_active_samples": 5.357271873419551
+    },
+    {
+      "symbol": "infinity::HeapResultHandler@infinity_core<infinity::CompareMax@infinity_core<float, int>>::AddResult(unsigned long, float, int)",
+      "samples": 1588,
+      "percent_of_task_active_samples": 2.868289863449173
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SelectNeighborsHeuristic<false>(std::vector<std::pair<float, int>>, unsigned long, int*, int*) const",
+      "samples": 1350,
+      "percent_of_task_active_samples": 2.4384076295065387
+    },
+    {
+      "symbol": "std::condition_variable::wait(std::unique_lock<std::mutex>&)",
+      "samples": 1072,
+      "percent_of_task_active_samples": 1.9362762806155625
+    },
+    {
+      "symbol": "_pthread_cond_wait",
+      "samples": 1071,
+      "percent_of_task_active_samples": 1.934470052741854
+    },
+    {
+      "symbol": "__psynch_cvwait",
+      "samples": 1067,
+      "percent_of_task_active_samples": 1.9272451412470197
+    },
+    {
+      "symbol": "std::__shared_mutex_base::lock_shared()",
+      "samples": 1014,
+      "percent_of_task_active_samples": 1.8315150639404667
+    },
+    {
+      "symbol": "infinity::SIMDPrefetch(void const*)",
+      "samples": 542,
+      "percent_of_task_active_samples": 0.9789755075500325
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SearchLayerNearest<true>(int, float const* const&, int, int) const",
+      "samples": 463,
+      "percent_of_task_active_samples": 0.8362835055270573
+    },
+    {
+      "symbol": "std::__shared_mutex_base::lock()",
+      "samples": 255,
+      "percent_of_task_active_samples": 0.4605881077956795
+    },
+    {
+      "symbol": "std::mutex::unlock()",
+      "samples": 149,
+      "percent_of_task_active_samples": 0.2691279531825735
+    },
+    {
+      "symbol": "std::mutex::lock()",
+      "samples": 148,
+      "percent_of_task_active_samples": 0.26732172530886494
+    },
+    {
+      "symbol": "operator new(unsigned long)",
+      "samples": 113,
+      "percent_of_task_active_samples": 0.2041037497290658
+    },
+    {
+      "symbol": "pthread_mutex_unlock",
+      "samples": 108,
+      "percent_of_task_active_samples": 0.1950726103605231
+    },
+    {
+      "symbol": "_xzm_free",
+      "samples": 82,
+      "percent_of_task_active_samples": 0.14811068564410085
+    },
+    {
+      "symbol": "pthread_mutex_lock",
+      "samples": 75,
+      "percent_of_task_active_samples": 0.13546709052814104
+    },
+    {
+      "symbol": "std::__shared_mutex_base::unlock_shared()",
+      "samples": 72,
+      "percent_of_task_active_samples": 0.13004840690701538
+    },
+    {
+      "symbol": "_xzm_xzone_malloc_tiny",
+      "samples": 68,
+      "percent_of_task_active_samples": 0.1228234954121812
+    },
+    {
+      "symbol": "std::condition_variable::notify_all()",
+      "samples": 49,
+      "percent_of_task_active_samples": 0.0885051658117188
+    },
+    {
+      "symbol": "_platform_memset",
+      "samples": 48,
+      "percent_of_task_active_samples": 0.08669893793801026
+    },
+    {
+      "symbol": "pthread_cond_broadcast",
+      "samples": 45,
+      "percent_of_task_active_samples": 0.08128025431688461
+    },
+    {
+      "symbol": "_platform_memmove",
+      "samples": 42,
+      "percent_of_task_active_samples": 0.07586157069575898
+    },
+    {
+      "symbol": "std::__shared_mutex_base::unlock()",
+      "samples": 32,
+      "percent_of_task_active_samples": 0.057799291958673504
+    }
+  ],
+  "top_exclusive_symbol_sample_lines": [
+    {
+      "symbol": "infinity::F32L2SSEBatch4@infinity_core(float const*, float const*, float const*, float const*, float const*, unsigned long, float*)",
+      "sample_call_tree_lines": [
+        173,
+        224,
+        229,
+        303,
+        360,
+        365,
+        439,
+        503,
+        508,
+        579,
+        643,
+        648,
+        728,
+        793,
+        798,
+        889,
+        946,
+        951,
+        1035,
+        1098,
+        1103,
+        1195,
+        1258,
+        1263,
+        1359,
+        1418,
+        1423,
+        1497,
+        1557,
+        1562,
+        1641,
+        1701,
+        1706,
+        1798,
+        1866,
+        1871
+      ]
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SearchLayer<true, std::nullopt_t, (infinity::LogicalType@logical_type)0, void>(int, float const* const&, int, int, unsigned long, T0 const&) const",
+      "sample_call_tree_lines": [
+        174,
+        304,
+        440,
+        580,
+        729,
+        890,
+        1036,
+        1196,
+        1360,
+        1498,
+        1642,
+        1799
+      ]
+    },
+    {
+      "symbol": "infinity::F32L2SSE@infinity_core(float const*, float const*, unsigned long)",
+      "sample_call_tree_lines": [
+        192,
+        227,
+        262,
+        266,
+        322,
+        348,
+        363,
+        395,
+        405,
+        409,
+        463,
+        506,
+        525,
+        539,
+        543,
+        601,
+        617,
+        646,
+        681,
+        685,
+        695,
+        746,
+        796,
+        835,
+        839,
+        853,
+        894,
+        939,
+        949,
+        978,
+        981,
+        985,
+        1004,
+        1040,
+        1101,
+        1143,
+        1146,
+        1150,
+        1200,
+        1261,
+        1298,
+        1308,
+        1312,
+        1331,
+        1364,
+        1421,
+        1438,
+        1455,
+        1459,
+        1461,
+        1502,
+        1560,
+        1594,
+        1603,
+        1607,
+        1646,
+        1704,
+        1740,
+        1743,
+        1747,
+        1750,
+        1803,
+        1869,
+        1896,
+        1908,
+        1912
+      ]
+    },
+    {
+      "symbol": "infinity::HeapResultHandler@infinity_core<infinity::CompareMax@infinity_core<float, int>>::AddResult(unsigned long, float, int)",
+      "sample_call_tree_lines": [
+        176,
+        206,
+        318,
+        337,
+        459,
+        477,
+        582,
+        615,
+        744,
+        761,
+        892,
+        920,
+        1038,
+        1074,
+        1198,
+        1239,
+        1362,
+        1398,
+        1500,
+        1539,
+        1644,
+        1683,
+        1801,
+        1845
+      ]
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SelectNeighborsHeuristic<true>(std::vector<std::pair<float, int>>, unsigned long, int*, int*) const",
+      "sample_call_tree_lines": [
+        225,
+        361,
+        504,
+        644,
+        794,
+        947,
+        1099,
+        1259,
+        1419,
+        1558,
+        1702,
+        1867
+      ]
+    },
+    {
+      "symbol": "__psynch_cvwait",
+      "sample_call_tree_lines": [
+        181,
+        234,
+        238,
+        309,
+        370,
+        374,
+        445,
+        513,
+        518,
+        548,
+        587,
+        653,
+        657,
+        693,
+        734,
+        803,
+        807,
+        844,
+        899,
+        956,
+        960,
+        990,
+        1045,
+        1108,
+        1112,
+        1205,
+        1268,
+        1279,
+        1317,
+        1369,
+        1428,
+        1432,
+        1466,
+        1507,
+        1567,
+        1575,
+        1651,
+        1711,
+        1715,
+        1755,
+        1808,
+        1877,
+        1887,
+        1917
+      ]
+    },
+    {
+      "symbol": "infinity::SIMDPrefetch(void const*)",
+      "sample_call_tree_lines": [
+        190,
+        320,
+        461,
+        603,
+        748,
+        907,
+        1056,
+        1215,
+        1381,
+        1518,
+        1662,
+        1818
+      ]
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SelectNeighborsHeuristic<false>(std::vector<std::pair<float, int>>, unsigned long, int*, int*) const",
+      "sample_call_tree_lines": [
+        263,
+        406,
+        540,
+        682,
+        836,
+        982,
+        1147,
+        1309,
+        1456,
+        1604,
+        1744,
+        1909
+      ]
+    },
+    {
+      "symbol": "pthread_mutex_unlock",
+      "sample_call_tree_lines": [
+        185,
+        195,
+        248,
+        281,
+        316,
+        332,
+        377,
+        392,
+        455,
+        473,
+        521,
+        563,
+        597,
+        612,
+        737,
+        751,
+        813,
+        903,
+        910,
+        1053,
+        1059,
+        1115,
+        1208,
+        1224,
+        1271,
+        1294,
+        1372,
+        1390,
+        1435,
+        1510,
+        1521,
+        1570,
+        1591,
+        1658,
+        1694,
+        1718,
+        1813,
+        1829,
+        1880,
+        1904,
+        1920
+      ]
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::ConnectNeighbors(int, int const*, int, int)",
+      "sample_call_tree_lines": [
+        258,
+        402,
+        523,
+        663,
+        815,
+        964,
+        1134,
+        1281,
+        1436,
+        1580,
+        1721,
+        1872
+      ]
+    },
+    {
+      "symbol": "pthread_mutex_lock",
+      "sample_call_tree_lines": [
+        202,
+        245,
+        273,
+        312,
+        326,
+        380,
+        389,
+        419,
+        448,
+        467,
+        591,
+        607,
+        660,
+        667,
+        689,
+        706,
+        742,
+        758,
+        810,
+        916,
+        972,
+        1002,
+        1017,
+        1049,
+        1119,
+        1125,
+        1213,
+        1220,
+        1274,
+        1289,
+        1344,
+        1377,
+        1385,
+        1470,
+        1514,
+        1578,
+        1588,
+        1618,
+        1654,
+        1729,
+        1779,
+        1826,
+        1883
+      ]
+    },
+    {
+      "symbol": "_xzm_xzone_malloc_tiny",
+      "sample_call_tree_lines": [
+        217,
+        340,
+        492,
+        495,
+        498,
+        529,
+        630,
+        633,
+        699,
+        780,
+        785,
+        830,
+        923,
+        934,
+        976,
+        1069,
+        1086,
+        1137,
+        1166,
+        1234,
+        1249,
+        1301,
+        1395,
+        1451,
+        1474,
+        1532,
+        1546,
+        1625,
+        1669,
+        1672,
+        1738,
+        1766,
+        1837,
+        1851,
+        1900
+      ]
+    },
+    {
+      "symbol": "_platform_memset",
+      "sample_call_tree_lines": [
+        211,
+        214,
+        256,
+        284,
+        354,
+        401,
+        484,
+        620,
+        623,
+        676,
+        702,
+        767,
+        775,
+        870,
+        1092,
+        1230,
+        1244,
+        1334,
+        1339,
+        1549,
+        1665,
+        1678,
+        1732,
+        1775,
+        1843,
+        1848,
+        1891
+      ]
+    },
+    {
+      "symbol": "_platform_memmove",
+      "sample_call_tree_lines": [
+        219,
+        342,
+        475,
+        635,
+        782,
+        927,
+        1076,
+        1241,
+        1400,
+        1551,
+        1681,
+        1834,
+        1859
+      ]
+    },
+    {
+      "symbol": "__psynch_mutexwait",
+      "sample_call_tree_lines": [
+        201,
+        272,
+        330,
+        415,
+        452,
+        470,
+        555,
+        594,
+        610,
+        757,
+        859,
+        868,
+        915,
+        995,
+        1001,
+        1156,
+        1162,
+        1173,
+        1322,
+        1328,
+        1447,
+        1527,
+        1614,
+        1762,
+        1825
+      ]
+    },
+    {
+      "symbol": "mach_absolute_time",
+      "sample_call_tree_lines": [
+        209,
+        346,
+        487,
+        532,
+        625,
+        764,
+        930,
+        1079,
+        1227,
+        1404,
+        1477,
+        1536,
+        1676,
+        1697,
+        1735,
+        1772,
+        1841,
+        1862,
+        1893
+      ]
+    },
+    {
+      "symbol": "_xzm_free",
+      "sample_call_tree_lines": [
+        257,
+        344,
+        488,
+        768,
+        832,
+        931,
+        941,
+        1080,
+        1082,
+        1228,
+        1246,
+        1296,
+        1336,
+        1402,
+        1679,
+        1889
+      ]
+    },
+    {
+      "symbol": "__psynch_cvbroad",
+      "sample_call_tree_lines": [
+        242,
+        385,
+        536,
+        819,
+        968,
+        1133,
+        1179,
+        1285,
+        1584,
+        1725,
+        1932
+      ]
+    },
+    {
+      "symbol": "std::mutex::unlock()",
+      "sample_call_tree_lines": [
+        186,
+        335,
+        456,
+        522,
+        598,
+        662,
+        670,
+        738,
+        904,
+        962,
+        1051,
+        1116,
+        1210,
+        1374,
+        1511,
+        1571,
+        1659,
+        1719,
+        1814,
+        1832
+      ]
+    },
+    {
+      "symbol": "std::__shared_mutex_base::lock_shared()",
+      "sample_call_tree_lines": [
+        188,
+        220,
+        457,
+        499,
+        599,
+        905,
+        1054,
+        1332,
+        1379,
+        1516,
+        1660,
+        1756,
+        1816
+      ]
+    },
+    {
+      "symbol": "std::mutex::lock()",
+      "sample_call_tree_lines": [
+        203,
+        381,
+        668,
+        822,
+        846,
+        973,
+        1064,
+        1126,
+        1275,
+        1290,
+        1387,
+        1448,
+        1528,
+        1655,
+        1827
+      ]
+    },
+    {
+      "symbol": "std::__shared_mutex_base::unlock_shared()",
+      "sample_call_tree_lines": [
+        334,
+        471,
+        759,
+        918,
+        942,
+        1065,
+        1221,
+        1388,
+        1529,
+        1831
+      ]
+    },
+    {
+      "symbol": "DYLD-STUB$$pthread_mutex_lock",
+      "sample_call_tree_lines": [
+        327,
+        449,
+        590,
+        741,
+        1063,
+        1219,
+        1378,
+        1386,
+        1515,
+        1611,
+        1822
+      ]
+    },
+    {
+      "symbol": "infinity::KnnHnswBase@infinity_core<infinity::PlainL2VecStoreType@infinity_core<float, false>, int, true>::SearchLayerNearest<true>(int, float const* const&, int, int) const",
+      "sample_call_tree_lines": [
+        549,
+        696,
+        860,
+        1005,
+        1329,
+        1619,
+        1748,
+        1921
+      ]
+    },
+    {
+      "symbol": "DYLD-STUB$$pthread_mutex_unlock",
+      "sample_call_tree_lines": [
+        196,
+        315,
+        825,
+        902,
+        1060,
+        1129,
+        1209,
+        1223,
+        1373,
+        1391,
+        1522,
+        1830
+      ]
+    },
+    {
+      "symbol": "<deduplicated_symbol>",
+      "sample_call_tree_lines": [
+        351,
+        480,
+        771,
+        778,
+        1165,
+        1235,
+        1473,
+        1533,
+        1765,
+        1838,
+        1899
+      ]
+    },
+    {
+      "symbol": "_xzm_xzone_malloc_small_freelist",
+      "sample_call_tree_lines": [
+        779,
+        924,
+        1071,
+        1089,
+        1237,
+        1252,
+        1394,
+        1412,
+        1691,
+        1854,
+        1857
+      ]
+    },
+    {
+      "symbol": "pthread_cond_broadcast",
+      "sample_call_tree_lines": [
+        386,
+        673,
+        713,
+        820,
+        969,
+        1180,
+        1291,
+        1585,
+        1726
+      ]
+    },
+    {
+      "symbol": "_pthread_mutex_check_init_slow",
+      "sample_call_tree_lines": [
+        708,
+        1482,
+        1927
+      ]
+    },
+    {
+      "symbol": "std::__shared_mutex_base::unlock()",
+      "sample_call_tree_lines": [
+        249,
+        259,
+        671,
+        826,
+        1130,
+        1295,
+        1452,
+        1905
+      ]
+    }
+  ]
+}
