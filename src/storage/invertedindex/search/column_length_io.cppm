@@ -53,7 +53,7 @@ public:
         return SeekFile(row_id);
     }
 
-    std::pair<u64, u64> GetDocTermCount() const;
+    std::pair<size_t, size_t> GetDocTermCount() const;
 
 private:
     u32 SeekFile(RowID row_id);

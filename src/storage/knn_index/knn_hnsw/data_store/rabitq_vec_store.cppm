@@ -16,6 +16,7 @@ module;
 
 #include "common/simd/simd_functions.h"
 #include <cassert>
+#include <cstddef>
 
 export module infinity_core:rabitq_vec_store;
 
@@ -71,6 +72,32 @@ struct RabitqStoreData {
     AlignType compress_vec_[];
 };
 
+export template <typename DataType, typename AlignType>
+class RabitqStoreDataView {
+    using This = RabitqStoreDataView<DataType, AlignType>;
+    using Layout = RabitqStoreData<DataType, AlignType>;
+
+    static_assert(std::is_standard_layout_v<Layout>);
+    static_assert(sizeof(Layout) == offsetof(Layout, compress_vec_));
+    static_assert(alignof(AlignType) == 1);
+
+public:
+    RabitqStoreDataView() = default;
+    explicit RabitqStoreDataView(const char *data)
+        : raw_norm_(HnswLoadUnaligned<DataType>(data + offsetof(Layout, raw_norm_))),
+          norm_(HnswLoadUnaligned<DataType>(data + offsetof(Layout, norm_))), sum_(HnswLoadUnaligned<DataType>(data + offsetof(Layout, sum_))),
+          error_(HnswLoadUnaligned<DataType>(data + offsetof(Layout, error_))),
+          compress_vec_(reinterpret_cast<const AlignType *>(data + sizeof(Layout))) {}
+
+    const This *operator->() const noexcept { return this; }
+
+    DataType raw_norm_{};
+    DataType norm_{};
+    DataType sum_{};
+    DataType error_{};
+    const AlignType *compress_vec_{nullptr};
+};
+
 export template <typename DataType, typename CompressType>
 struct RabitqQueryData {
     DataType query_raw_norm_{0};
@@ -93,8 +120,9 @@ public:
     using CompressType = u8; // Compress query per dimension size
     using DistanceType = f32;
     using StoreData = RabitqStoreData<DataType, AlignType>;
+    using StoredDataView = RabitqStoreDataView<DataType, AlignType>;
     using QueryData = RabitqQueryData<DataType, CompressType>;
-    using StoreType = const StoreData *;
+    using StoreType = StoredDataView;
     struct QueryType {
         std::unique_ptr<QueryData> inner_;
         QueryData *operator->() const { return inner_.get(); }
@@ -163,11 +191,13 @@ public:
 
 public:
     RabitqVecStoreMetaBase() : origin_dim_(0), dim_(0), compress_data_size_(0), compress_query_size_(0) {}
-    RabitqVecStoreMetaBase(This &&other)
+    RabitqVecStoreMetaBase(This &&other) noexcept
         : origin_dim_(std::exchange(other.origin_dim_, 0)), rom_(std::move(other.rom_)), rot_centroid_(std::move(other.rot_centroid_)),
           dim_(std::exchange(other.dim_, 0)), compress_data_size_(std::exchange(other.compress_data_size_, 0)),
           compress_query_size_(std::exchange(other.compress_query_size_, 0)) {}
-    RabitqVecStoreMetaBase &operator=(This &&other) {
+    RabitqVecStoreMetaBase &operator=(This &&other) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<decltype(rom_)>);
+        static_assert(std::is_nothrow_move_assignable_v<decltype(rot_centroid_)>);
         if (this != &other) {
             origin_dim_ = std::exchange(other.origin_dim_, 0);
             rom_ = std::move(other.rom_);
@@ -191,7 +221,7 @@ public:
         return query;
     }
 
-    void CompressToCode(const DataType *src, StoreData *dest) const {
+    void CompressToCode(const DataType *src, char *dest) const {
         size_t align_size = MetaType::align_size_;
         size_t bin_code_size = dim_ / align_size;
 
@@ -240,11 +270,13 @@ public:
         error = MetaType::IsApproxZero(error) ? 0.8 : error;
 
         // 7.store data in dest
-        dest->raw_norm_ = raw_norm;
-        dest->norm_ = norm;
-        dest->sum_ = sum;
-        dest->error_ = error;
-        std::copy(bin_src.get(), bin_src.get() + bin_code_size, dest->compress_vec_);
+        static_assert(sizeof(StoreData) == offsetof(StoreData, compress_vec_));
+        static_assert(std::is_standard_layout_v<StoreData>);
+        HnswStoreUnaligned(dest + offsetof(StoreData, raw_norm_), raw_norm);
+        HnswStoreUnaligned(dest + offsetof(StoreData, norm_), norm);
+        HnswStoreUnaligned(dest + offsetof(StoreData, sum_), sum);
+        HnswStoreUnaligned(dest + offsetof(StoreData, error_), error);
+        std::memcpy(dest + sizeof(StoreData), bin_src.get(), bin_code_size * sizeof(AlignType));
     }
 
     void CompressToQuery(const DataType *src, QueryData *dest) const {
@@ -399,23 +431,46 @@ public:
     static This Make(size_t origin_dim, bool normalize) { return This(origin_dim); }
 
     static This Load(LocalFileHandle &file_handle) {
-        size_t origin_dim;
-        file_handle.Read(&origin_dim, sizeof(origin_dim));
+        const size_t origin_dim = HnswReadStream<size_t>(file_handle, "Rabitq dimension");
+        if (origin_dim == 0) {
+            HnswStreamError("Rabitq dimension must be nonzero");
+        }
+        const size_t aligned = HnswStreamCheckedAdd(origin_dim, MetaType::align_size_ - 1, "Rabitq aligned dimension");
+        const size_t dim = aligned / MetaType::align_size_ * MetaType::align_size_;
+        static_cast<void>(
+            HnswStreamCheckedAdd(sizeof(StoreData), dim / MetaType::align_size_, "Rabitq compressed vector"));
+        static_cast<void>(HnswStreamCheckedAdd(
+            sizeof(QueryData),
+            HnswStreamCheckedMultiply(dim, sizeof(CompressType), "Rabitq compressed query"),
+            "Rabitq compressed query"));
+        const size_t matrix_elements = HnswStreamCheckedMultiply(dim, dim, "Rabitq rotation matrix");
+        const size_t matrix_size = HnswStreamCheckedMultiply(matrix_elements, sizeof(DataType), "Rabitq rotation matrix");
+        const size_t centroid_size = HnswStreamCheckedMultiply(dim, sizeof(DataType), "Rabitq rotation centroid");
+        HnswEnsureStreamAvailable(
+            file_handle, HnswStreamCheckedAdd(matrix_size, centroid_size, "Rabitq metadata"), "Rabitq metadata");
         This meta(origin_dim);
-        size_t dim = meta.dim_;
-        file_handle.Read(meta.rom_.get(), dim * dim * sizeof(DataType));
-        file_handle.Read(meta.rot_centroid_.get(), dim * sizeof(DataType));
+        HnswReadExact(file_handle, meta.rom_.get(), matrix_size, "Rabitq rotation matrix");
+        HnswReadExact(file_handle, meta.rot_centroid_.get(), centroid_size, "Rabitq rotation centroid");
         return meta;
     }
 
-    static This LoadFromPtr(const char *&ptr) {
-        size_t origin_dim = ReadBufAdv<size_t>(ptr);
+    static This LoadFromPtr(HnswPointerReader &reader) {
+        const size_t origin_dim = reader.Read<size_t>("Rabitq dimension");
+        if (origin_dim == 0) {
+            HnswPointerImageError("Rabitq dimension must be nonzero");
+        }
+        const size_t aligned = HnswCheckedAdd(origin_dim, MetaType::align_size_ - 1, "Rabitq aligned dimension");
+        const size_t dim = aligned / MetaType::align_size_ * MetaType::align_size_;
+        static_cast<void>(HnswCheckedAdd(sizeof(StoreData), dim / MetaType::align_size_, "Rabitq compressed vector"));
+        static_cast<void>(
+            HnswCheckedAdd(sizeof(QueryData), HnswCheckedMultiply(dim, sizeof(CompressType), "Rabitq compressed query"), "Rabitq compressed query"));
+        const size_t matrix_elements = HnswCheckedMultiply(dim, dim, "Rabitq rotation matrix");
+        const size_t matrix_size = HnswCheckedMultiply(matrix_elements, sizeof(DataType), "Rabitq rotation matrix");
+        const size_t centroid_size = HnswCheckedMultiply(dim, sizeof(DataType), "Rabitq rotation centroid");
+        reader.EnsureAvailable(HnswCheckedAdd(matrix_size, centroid_size, "Rabitq metadata"), "Rabitq metadata");
         This meta(origin_dim);
-        size_t dim = meta.dim_;
-        std::memcpy(meta.rom_.get(), ptr, dim * dim * sizeof(DataType));
-        ptr += dim * dim * sizeof(DataType);
-        std::memcpy(meta.rot_centroid_.get(), ptr, dim * sizeof(DataType));
-        ptr += dim * sizeof(DataType);
+        reader.CopyTo(meta.rom_.get(), matrix_size, "Rabitq rotation matrix");
+        reader.CopyTo(meta.rot_centroid_.get(), centroid_size, "Rabitq rotation centroid");
         return meta;
     }
 
@@ -440,7 +495,7 @@ public:
         while (true) {
             if (auto ret = query_iter.Next(); ret) {
                 auto &[vec, _] = *ret;
-                for (size_t i = 0; i < dim; ++i) {
+                for (size_t i = 0; i < this->origin_dim_; ++i) {
                     new_centroid[i] += vec[i];
                 }
                 ++cur_vec_num;
@@ -492,13 +547,19 @@ private:
 public:
     RabitqVecStoreMeta() = default;
 
-    static This LoadFromPtr(const char *&ptr) {
-        size_t origin_dim = ReadBufAdv<size_t>(ptr);
-        size_t dim = AlignUp(origin_dim, MetaType::align_size_);
-        auto *rom = reinterpret_cast<DataType *>(const_cast<char *>(ptr));
-        ptr += dim * dim * sizeof(DataType);
-        auto *rot_centroid = reinterpret_cast<DataType *>(const_cast<char *>(ptr));
-        ptr += dim * sizeof(DataType);
+    static This LoadFromPtr(HnswPointerReader &reader) {
+        const size_t origin_dim = reader.Read<size_t>("Rabitq dimension");
+        if (origin_dim == 0) {
+            HnswPointerImageError("Rabitq dimension must be nonzero");
+        }
+        const size_t aligned = HnswCheckedAdd(origin_dim, MetaType::align_size_ - 1, "Rabitq aligned dimension");
+        const size_t dim = aligned / MetaType::align_size_ * MetaType::align_size_;
+        static_cast<void>(HnswCheckedAdd(sizeof(StoreData), dim / MetaType::align_size_, "Rabitq compressed vector"));
+        static_cast<void>(
+            HnswCheckedAdd(sizeof(QueryData), HnswCheckedMultiply(dim, sizeof(CompressType), "Rabitq compressed query"), "Rabitq compressed query"));
+        const size_t matrix_elements = HnswCheckedMultiply(dim, dim, "Rabitq rotation matrix");
+        auto *rom = const_cast<DataType *>(reader.ReadArray<DataType>(matrix_elements, "Rabitq rotation matrix"));
+        auto *rot_centroid = const_cast<DataType *>(reader.ReadArray<DataType>(dim, "Rabitq rotation centroid"));
         return This(origin_dim, rom, rot_centroid);
     }
 };
@@ -535,7 +596,7 @@ public:
         }
     }
 
-    StoreType GetVec(size_t idx, const Meta &meta) const { return reinterpret_cast<StoreType>(ptr_.get() + idx * meta.compress_data_size()); }
+    StoreType GetVec(size_t idx, const Meta &meta) const { return StoreType(ptr_.get() + idx * meta.compress_data_size()); }
 
     QueryType GetVecToQuery(size_t idx, const Meta &meta) const {
         auto query = std::make_unique<DataType[]>(meta.dim());
@@ -543,7 +604,9 @@ public:
         return meta.MakeQuery(query.get());
     }
 
-    void Prefetch(VertexType vec_i, const Meta &meta) const { SIMDPrefetch(reinterpret_cast<const void *>(GetVec(vec_i, meta))); }
+    void Prefetch(VertexType vec_i, const Meta &meta) const {
+        SIMDPrefetch(static_cast<const void *>(ptr_.get() + vec_i * meta.compress_data_size()));
+    }
 
     void Dump(std::ostream &os, size_t offset, size_t chunk_size, const Meta &meta) const {
         for (int i = 0; i < (int)chunk_size; ++i) {
@@ -587,25 +650,35 @@ public:
     }
 
     static This Load(LocalFileHandle &file_handle, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
-        assert(cur_vec_num <= max_vec_num);
+        if (cur_vec_num > max_vec_num) {
+            HnswStreamError("Rabitq vector count exceeds capacity");
+        }
+        const size_t stored_size = HnswStreamCheckedMultiply(cur_vec_num, meta.compress_data_size(), "Rabitq vector data");
+        const size_t max_size = HnswStreamCheckedMultiply(max_vec_num, meta.compress_data_size(), "Rabitq vector capacity");
+        HnswEnsureStreamAvailable(file_handle, stored_size, "Rabitq vector data");
         This ret(max_vec_num, meta);
-        file_handle.Read(ret.ptr_.get(), cur_vec_num * meta.compress_data_size());
-        mem_usage += max_vec_num * meta.compress_data_size();
+        HnswReadExact(file_handle, ret.ptr_.get(), stored_size, "Rabitq vector data");
+        mem_usage = HnswStreamCheckedAdd(mem_usage, max_size, "Rabitq vector memory usage");
         return ret;
     }
 
-    static This LoadFromPtr(const char *&ptr, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
+    static This LoadFromPtr(HnswPointerReader &reader, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
+        if (cur_vec_num > max_vec_num) {
+            HnswPointerImageError("Rabitq vector count exceeds capacity");
+        }
+        const size_t stored_size = HnswCheckedMultiply(cur_vec_num, meta.compress_data_size(), "Rabitq vector data");
+        const size_t max_size = HnswCheckedMultiply(max_vec_num, meta.compress_data_size(), "Rabitq vector capacity");
+        reader.EnsureAvailable(stored_size, "Rabitq vector data");
         This ret(max_vec_num, meta);
-        std::memcpy(ret.ptr_.get(), ptr, cur_vec_num * meta.compress_data_size());
-        ptr += cur_vec_num * meta.compress_data_size();
-        mem_usage += max_vec_num * meta.compress_data_size();
+        reader.CopyTo(ret.ptr_.get(), stored_size, "Rabitq vector data");
+        mem_usage = HnswCheckedAdd(mem_usage, max_size, "Rabitq vector memory usage");
         return ret;
     }
 
     void SetVec(size_t idx, const DataType *vec, const Meta &meta, size_t &mem_usage) { meta.CompressToCode(vec, GetVecMut(idx, meta)); }
 
 private:
-    StoreData *GetVecMut(size_t idx, const Meta &meta) { return reinterpret_cast<StoreData *>(this->ptr_.get() + idx * meta.compress_data_size()); }
+    char *GetVecMut(size_t idx, const Meta &meta) { return this->ptr_.get() + idx * meta.compress_data_size(); }
 };
 
 export template <typename DataType>
@@ -621,11 +694,9 @@ private:
 public:
     RabitqVecStoreInner() = default;
 
-    static This LoadFromPtr(const char *&ptr, size_t cur_vec_num, const Meta &meta) {
-        const char *p = ptr;
-        This ret(p);
-        ptr += cur_vec_num * meta.compress_data_size();
-        return ret;
+    static This LoadFromPtr(HnswPointerReader &reader, size_t cur_vec_num, const Meta &meta) {
+        const size_t size = HnswCheckedMultiply(cur_vec_num, meta.compress_data_size(), "Rabitq vector data");
+        return This(reader.ReadBytes(size, "Rabitq vector data"));
     }
 };
 

@@ -15,6 +15,7 @@
 module;
 
 #include <cassert>
+#include <cstddef>
 
 #include <common/simd/simd_functions.h>
 
@@ -38,6 +39,34 @@ struct LVQData {
     CompressType compress_vec_[];
 };
 
+export template <typename DataType, typename LocalCacheType, typename CompressType>
+class LVQDataView {
+    using This = LVQDataView<DataType, LocalCacheType, CompressType>;
+    using Layout = LVQData<DataType, LocalCacheType, CompressType>;
+    using CacheFirst = typename LocalCacheType::first_type;
+    using CacheSecond = typename LocalCacheType::second_type;
+
+    static_assert(std::is_standard_layout_v<Layout>);
+    static_assert(std::is_standard_layout_v<LocalCacheType>);
+    static_assert(sizeof(Layout) == offsetof(Layout, compress_vec_));
+    static_assert(alignof(CompressType) == 1);
+
+public:
+    LVQDataView() = default;
+    explicit LVQDataView(const char *data)
+        : scale_(HnswLoadUnaligned<DataType>(data + offsetof(Layout, scale_))), bias_(HnswLoadUnaligned<DataType>(data + offsetof(Layout, bias_))),
+          local_cache_{HnswLoadUnaligned<CacheFirst>(data + offsetof(Layout, local_cache_) + offsetof(LocalCacheType, first)),
+                       HnswLoadUnaligned<CacheSecond>(data + offsetof(Layout, local_cache_) + offsetof(LocalCacheType, second))},
+          compress_vec_(reinterpret_cast<const CompressType *>(data + sizeof(Layout))) {}
+
+    const This *operator->() const noexcept { return this; }
+
+    DataType scale_{};
+    DataType bias_{};
+    LocalCacheType local_cache_{};
+    const CompressType *compress_vec_{nullptr};
+};
+
 export template <typename DataType, typename CompressType, typename LVQCache, bool OwnMem>
 class LVQVecStoreInner;
 
@@ -46,19 +75,25 @@ class LVQVecStoreMetaType {
 public:
     using LocalCacheType = LVQCache::LocalCacheType;
     using LVQData = LVQData<DataType, LocalCacheType, CompressType>;
+    using StoredDataView = LVQDataView<DataType, LocalCacheType, CompressType>;
     struct LVQQuery {
-        std::unique_ptr<LVQData> inner_;
-        LVQData *operator->() const { return inner_.get(); }
+        std::unique_ptr<char[]> inner_;
+        StoredDataView view_;
 
-        LVQQuery(size_t compress_data_size) : inner_(new(new char[compress_data_size]) LVQData) {}
-        LVQQuery(size_t compress_data_size, const LVQData *data) : LVQQuery(compress_data_size) {
-            memcpy(reinterpret_cast<char *>(inner_.get()), reinterpret_cast<const char *>(data), compress_data_size);
+        const StoredDataView *operator->() const noexcept { return &view_; }
+        char *data() const noexcept { return inner_.get(); }
+        void Refresh() { view_ = StoredDataView(inner_.get()); }
+
+        explicit LVQQuery(size_t compress_data_size) : inner_(std::make_unique_for_overwrite<char[]>(compress_data_size)) {}
+        LVQQuery(size_t compress_data_size, const char *data) : LVQQuery(compress_data_size) {
+            std::memcpy(inner_.get(), data, compress_data_size);
+            Refresh();
         }
         LVQQuery(LVQQuery &&other) = default;
-        ~LVQQuery() { delete[] reinterpret_cast<char *>(inner_.release()); }
+        LVQQuery &operator=(LVQQuery &&other) = default;
     };
 
-    using StoreType = const LVQData *;
+    using StoreType = StoredDataView;
     using QueryType = LVQQuery;
     using DistanceType = f32;
 };
@@ -82,10 +117,12 @@ public:
 
 public:
     LVQVecStoreMetaBase() : dim_(0), compress_data_size_(0), normalize_(false) {}
-    LVQVecStoreMetaBase(This &&other)
+    LVQVecStoreMetaBase(This &&other) noexcept
         : dim_(std::exchange(other.dim_, 0)), compress_data_size_(std::exchange(other.compress_data_size_, 0)), mean_(std::move(other.mean_)),
           global_cache_(std::exchange(other.global_cache_, GlobalCacheType())), normalize_(other.normalize_) {}
-    LVQVecStoreMetaBase &operator=(This &&other) {
+    LVQVecStoreMetaBase &operator=(This &&other) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<decltype(mean_)>);
+        static_assert(std::is_nothrow_move_assignable_v<GlobalCacheType>);
         if (this != &other) {
             dim_ = std::exchange(other.dim_, 0);
             compress_data_size_ = std::exchange(other.compress_data_size_, 0);
@@ -111,11 +148,12 @@ public:
 
     LVQQuery MakeQuery(const DataType *vec) const {
         LVQQuery query(compress_data_size_);
-        CompressTo(vec, query.inner_.get());
+        CompressTo(vec, query.data());
+        query.Refresh();
         return query;
     }
 
-    void CompressTo(const DataType *src, LVQData *dest) const {
+    void CompressTo(const DataType *src, char *dest) const {
         std::unique_ptr<DataType[]> normalized;
         if (normalize_) {
             normalized = std::make_unique_for_overwrite<DataType[]>(this->dim_);
@@ -135,7 +173,10 @@ public:
             src = normalized.get();
         }
 
-        CompressType *compress = dest->compress_vec_;
+        static_assert(sizeof(LVQData) == offsetof(LVQData, compress_vec_));
+        static_assert(alignof(CompressType) == 1);
+        std::memset(dest, 0, sizeof(LVQData));
+        CompressType *compress = reinterpret_cast<CompressType *>(dest + sizeof(LVQData));
 
         DataType lower = std::numeric_limits<DataType>::max();
         DataType upper = -std::numeric_limits<DataType>::max();
@@ -156,9 +197,17 @@ public:
                 compress[j] = c;
             }
         }
-        dest->scale_ = scale;
-        dest->bias_ = bias;
-        dest->local_cache_ = LVQCache::MakeLocalCache(compress, scale, dim_, mean_.get());
+        const LocalCacheType local_cache = LVQCache::MakeLocalCache(compress, scale, dim_, mean_.get());
+        using CacheFirst = typename LocalCacheType::first_type;
+        using CacheSecond = typename LocalCacheType::second_type;
+        static_assert(std::is_standard_layout_v<LVQData>);
+        static_assert(std::is_standard_layout_v<LocalCacheType>);
+        HnswStoreUnaligned(dest + offsetof(LVQData, scale_), scale);
+        HnswStoreUnaligned(dest + offsetof(LVQData, bias_), bias);
+        HnswStoreUnaligned(dest + offsetof(LVQData, local_cache_) + offsetof(LocalCacheType, first),
+                           static_cast<const CacheFirst &>(local_cache.first));
+        HnswStoreUnaligned(dest + offsetof(LVQData, local_cache_) + offsetof(LocalCacheType, second),
+                           static_cast<const CacheSecond &>(local_cache.second));
     }
 
     size_t dim() const { return dim_; }
@@ -170,7 +219,7 @@ public:
     const MeanType *mean() const { return mean_.get(); }
 
 protected:
-    void DecompressByMeanTo(const LVQData *src, const MeanType *mean, DataType *dest) const {
+    void DecompressByMeanTo(const StoreType &src, const MeanType *mean, DataType *dest) const {
         const CompressType *compress = src->compress_vec_;
         DataType scale = src->scale_;
         DataType bias = src->bias_;
@@ -179,7 +228,7 @@ protected:
         }
     }
 
-    void DecompressTo(const LVQData *src, DataType *dest) const { DecompressByMeanTo(src, mean_.get(), dest); };
+    void DecompressTo(const StoreType &src, DataType *dest) const { DecompressByMeanTo(src, mean_.get(), dest); };
 
 protected:
     size_t dim_;
@@ -229,24 +278,43 @@ public:
     }
 
     static This Load(LocalFileHandle &file_handle) {
-        size_t dim;
-        file_handle.Read(&dim, sizeof(dim));
+        const size_t dim = HnswReadStream<size_t>(file_handle, "LVQ dimension");
+        if (dim == 0) {
+            HnswStreamError("LVQ dimension must be nonzero");
+        }
+        static_cast<void>(HnswStreamCheckedAdd(sizeof(LVQData),
+                                               HnswStreamCheckedMultiply(sizeof(CompressType), dim, "LVQ compressed vector"),
+                                               "LVQ compressed vector"));
+        const size_t mean_size = HnswStreamCheckedMultiply(sizeof(MeanType), dim, "LVQ mean");
+        const size_t cache_size = std::is_same_v<GlobalCacheType, std::tuple<>> ? 0 : sizeof(GlobalCacheType);
+        HnswEnsureStreamAvailable(
+            file_handle, HnswStreamCheckedAdd(mean_size, cache_size, "LVQ metadata"), "LVQ metadata");
         This meta(dim);
-        file_handle.Read(meta.mean_.get(), sizeof(MeanType) * dim);
+        HnswReadExact(file_handle, meta.mean_.get(), mean_size, "LVQ mean");
         if constexpr (!std::is_same_v<GlobalCacheType, std::tuple<>>) {
-            file_handle.Read(&meta.global_cache_, sizeof(GlobalCacheType));
+            HnswReadExact(file_handle, &meta.global_cache_, sizeof(GlobalCacheType), "LVQ global cache");
         }
         return meta;
     }
 
-    static This LoadFromPtr(const char *&ptr) {
-        size_t dim = ReadBufAdv<size_t>(ptr);
+    static This LoadFromPtr(HnswPointerReader &reader) {
+        const size_t dim = reader.Read<size_t>("LVQ dimension");
+        if (dim == 0) {
+            HnswPointerImageError("LVQ dimension must be nonzero");
+        }
+        static_cast<void>(
+            HnswCheckedAdd(sizeof(LVQData), HnswCheckedMultiply(sizeof(CompressType), dim, "LVQ compressed vector"), "LVQ compressed vector"));
+        const size_t mean_size = HnswCheckedMultiply(sizeof(MeanType), dim, "LVQ mean");
+        const size_t cache_size = std::is_same_v<GlobalCacheType, std::tuple<>> ? 0 : sizeof(GlobalCacheType);
+        reader.EnsureAvailable(HnswCheckedAdd(mean_size, cache_size, "LVQ metadata"), "LVQ metadata");
         This meta(dim);
-        std::memcpy(meta.mean_.get(), ptr, sizeof(MeanType) * dim);
-        ptr += sizeof(MeanType) * dim;
+        reader.CopyTo(meta.mean_.get(), mean_size, "LVQ mean");
         if constexpr (!std::is_same_v<GlobalCacheType, std::tuple<>>) {
-            std::memcpy(static_cast<void *>(&meta.global_cache_), ptr, sizeof(GlobalCacheType));
-            ptr += sizeof(GlobalCacheType);
+            using CacheFirst = typename GlobalCacheType::first_type;
+            using CacheSecond = typename GlobalCacheType::second_type;
+            static_assert(sizeof(GlobalCacheType) == sizeof(CacheFirst) + sizeof(CacheSecond));
+            meta.global_cache_ =
+                GlobalCacheType{reader.Read<CacheFirst>("LVQ global cache first value"), reader.Read<CacheSecond>("LVQ global cache second value")};
         }
         return meta;
     }
@@ -309,11 +377,22 @@ private:
 public:
     LVQVecStoreMeta() = default;
 
-    static This LoadFromPtr(const char *&ptr) {
-        size_t dim = ReadBufAdv<size_t>(ptr);
-        auto *mean = reinterpret_cast<MeanType *>(const_cast<char *>(ptr));
-        ptr += sizeof(MeanType) * dim;
-        GlobalCacheType global_cache = ReadBufAdv<GlobalCacheType>(ptr);
+    static This LoadFromPtr(HnswPointerReader &reader) {
+        const size_t dim = reader.Read<size_t>("LVQ dimension");
+        if (dim == 0) {
+            HnswPointerImageError("LVQ dimension must be nonzero");
+        }
+        static_cast<void>(
+            HnswCheckedAdd(sizeof(LVQData), HnswCheckedMultiply(sizeof(CompressType), dim, "LVQ compressed vector"), "LVQ compressed vector"));
+        auto *mean = const_cast<MeanType *>(reader.ReadArray<MeanType>(dim, "LVQ mean"));
+        GlobalCacheType global_cache{};
+        if constexpr (!std::is_same_v<GlobalCacheType, std::tuple<>>) {
+            using CacheFirst = typename GlobalCacheType::first_type;
+            using CacheSecond = typename GlobalCacheType::second_type;
+            static_assert(sizeof(GlobalCacheType) == sizeof(CacheFirst) + sizeof(CacheSecond));
+            global_cache =
+                GlobalCacheType{reader.Read<CacheFirst>("LVQ global cache first value"), reader.Read<CacheSecond>("LVQ global cache second value")};
+        }
         This meta(dim, mean, global_cache);
         return meta;
     }
@@ -349,11 +428,15 @@ public:
         }
     }
 
-    StoreType GetVec(size_t idx, const Meta &meta) const { return reinterpret_cast<StoreType>(ptr_.get() + idx * meta.compress_data_size()); }
+    StoreType GetVec(size_t idx, const Meta &meta) const { return StoreType(ptr_.get() + idx * meta.compress_data_size()); }
 
-    QueryType GetVecToQuery(size_t idx, const Meta &meta) const { return QueryType(meta.compress_data_size(), GetVec(idx, meta)); }
+    QueryType GetVecToQuery(size_t idx, const Meta &meta) const {
+        return QueryType(meta.compress_data_size(), ptr_.get() + idx * meta.compress_data_size());
+    }
 
-    void Prefetch(VertexType vec_i, const Meta &meta) const { SIMDPrefetch(reinterpret_cast<const void *>(GetVec(vec_i, meta))); }
+    void Prefetch(VertexType vec_i, const Meta &meta) const {
+        SIMDPrefetch(static_cast<const void *>(ptr_.get() + vec_i * meta.compress_data_size()));
+    }
 
 protected:
     ArrayPtr<char, OwnMem> ptr_;
@@ -396,25 +479,35 @@ public:
     }
 
     static This Load(LocalFileHandle &file_handle, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
-        assert(cur_vec_num <= max_vec_num);
+        if (cur_vec_num > max_vec_num) {
+            HnswStreamError("LVQ vector count exceeds capacity");
+        }
+        const size_t stored_size = HnswStreamCheckedMultiply(cur_vec_num, meta.compress_data_size(), "LVQ vector data");
+        const size_t max_size = HnswStreamCheckedMultiply(max_vec_num, meta.compress_data_size(), "LVQ vector capacity");
+        HnswEnsureStreamAvailable(file_handle, stored_size, "LVQ vector data");
         This ret(max_vec_num, meta);
-        file_handle.Read(ret.ptr_.get(), cur_vec_num * meta.compress_data_size());
-        mem_usage += max_vec_num * meta.compress_data_size();
+        HnswReadExact(file_handle, ret.ptr_.get(), stored_size, "LVQ vector data");
+        mem_usage = HnswStreamCheckedAdd(mem_usage, max_size, "LVQ vector memory usage");
         return ret;
     }
 
-    static This LoadFromPtr(const char *&ptr, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
+    static This LoadFromPtr(HnswPointerReader &reader, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
+        if (cur_vec_num > max_vec_num) {
+            HnswPointerImageError("LVQ vector count exceeds capacity");
+        }
+        const size_t stored_size = HnswCheckedMultiply(cur_vec_num, meta.compress_data_size(), "LVQ vector data");
+        const size_t max_size = HnswCheckedMultiply(max_vec_num, meta.compress_data_size(), "LVQ vector capacity");
+        reader.EnsureAvailable(stored_size, "LVQ vector data");
         This ret(max_vec_num, meta);
-        std::memcpy(ret.ptr_.get(), ptr, cur_vec_num * meta.compress_data_size());
-        ptr += cur_vec_num * meta.compress_data_size();
-        mem_usage += max_vec_num * meta.compress_data_size();
+        reader.CopyTo(ret.ptr_.get(), stored_size, "LVQ vector data");
+        mem_usage = HnswCheckedAdd(mem_usage, max_size, "LVQ vector memory usage");
         return ret;
     }
 
     void SetVec(size_t idx, const DataType *vec, const Meta &meta, size_t &mem_usage) { meta.CompressTo(vec, GetVecMut(idx, meta)); }
 
 private:
-    LVQData *GetVecMut(size_t idx, const Meta &meta) { return reinterpret_cast<LVQData *>(this->ptr_.get() + idx * meta.compress_data_size()); }
+    char *GetVecMut(size_t idx, const Meta &meta) { return this->ptr_.get() + idx * meta.compress_data_size(); }
 };
 
 export template <typename DataType, typename CompressType, typename LVQCache>
@@ -430,11 +523,9 @@ private:
 public:
     LVQVecStoreInner() = default;
 
-    static This LoadFromPtr(const char *&ptr, size_t cur_vec_num, const Meta &meta) {
-        const char *p = ptr;
-        This ret(p);
-        ptr += cur_vec_num * meta.compress_data_size();
-        return ret;
+    static This LoadFromPtr(HnswPointerReader &reader, size_t cur_vec_num, const Meta &meta) {
+        const size_t size = HnswCheckedMultiply(cur_vec_num, meta.compress_data_size(), "LVQ vector data");
+        return This(reader.ReadBytes(size, "LVQ vector data"));
     }
 };
 

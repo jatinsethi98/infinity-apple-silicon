@@ -186,6 +186,11 @@ std::shared_ptr<IndexBase> IndexHnsw::Make(std::shared_ptr<std::string> index_na
             RecoverableError(status);
         }
     }
+    constexpr size_t kMaximumM = static_cast<size_t>(std::numeric_limits<i32>::max()) / 2;
+    if (M < 2 || M > kMaximumM) {
+        Status status = Status::InvalidIndexParam("M must be in [2, INT32_MAX / 2]");
+        RecoverableError(status);
+    }
     if (build_type != HnswBuildType::kLSG && lsg_config) {
         lsg_config = std::nullopt;
     }

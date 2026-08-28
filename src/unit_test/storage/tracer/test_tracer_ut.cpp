@@ -29,6 +29,7 @@ import :blocking_queue;
 import third_party;
 import :logger;
 import :new_txn;
+import :new_txn_manager;
 import :infinity_context;
 
 import compilation_config;
@@ -119,6 +120,9 @@ void TestCatalog::DumpMemIndex(const std::string &index_name) {
 
 class TestMemIndexTracer : public MemIndexTracer {
 public:
+    using TxnPtr = decltype(std::declval<NewTxnManager *>()->BeginTxn(std::declval<std::unique_ptr<std::string>>(),
+                                                                     std::declval<TransactionType>()));
+
     TestMemIndexTracer(size_t index_memory_limit, TestCatalog &catalog) : MemIndexTracer(index_memory_limit), catalog_(catalog) {
         dump_thread_ = std::thread([this] { DumpRoutine(); });
     }
@@ -134,7 +138,7 @@ public:
         task_queue_.Enqueue(std::move(task));
     }
 
-    std::vector<std::shared_ptr<MemIndexDetail>> GetAllMemIndexes(NewTxn *new_txn) override { return catalog_.GetMemIndexes(); }
+    std::vector<std::shared_ptr<MemIndexDetail>> GetAllMemIndexes(TxnPtr new_txn) override { return catalog_.GetMemIndexes(); }
 
     void HandleDump(std::shared_ptr<DumpMemIndexTask> task);
 

@@ -58,17 +58,17 @@ void ObjStat::Deserialize(std::string_view str) {
     simdjson::parser parser;
     simdjson::document doc = parser.iterate(obj_json);
     ref_count_ = 0;
-    obj_size_ = doc["obj_size"];
-    parts_ = doc["parts"];
+    obj_size_ = static_cast<size_t>(doc["obj_size"].get<uint64_t>().value());
+    parts_ = static_cast<size_t>(doc["parts"].get<uint64_t>().value());
     if (simdjson::array array; doc["deleted_ranges"].get(array) == simdjson::SUCCESS) {
         size_t start = 0;
         size_t end = 0;
         for (auto range_obj : array) {
             if (auto item = range_obj["start"]; item.error() == simdjson::SUCCESS) {
-                start = item.get<size_t>();
+                start = static_cast<size_t>(item.get<uint64_t>().value());
             }
             if (auto item = range_obj["end"]; item.error() == simdjson::SUCCESS) {
-                end = item.get<size_t>();
+                end = static_cast<size_t>(item.get<uint64_t>().value());
             }
             deleted_ranges_.emplace(Range{.start_ = start, .end_ = end});
         }

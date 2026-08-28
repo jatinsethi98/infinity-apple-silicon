@@ -195,6 +195,7 @@ Status PlaidIndexDiskMerger::MergeChunk(BufferObj *chunk_buffer, u32 doc_offset)
 
     // Reserve space for new data (reserve in batches to avoid frequent reallocations)
     size_t current_embedding_offset = state_.centroid_ids.size();
+    const size_t required_centroid_count = current_embedding_offset + static_cast<size_t>(chunk_embedding_num);
 
     // Pre-allocate with some headroom to avoid frequent reallocations
     if (state_.doc_lens.capacity() < state_.doc_lens.size() + chunk_doc_num) {
@@ -203,8 +204,8 @@ Status PlaidIndexDiskMerger::MergeChunk(BufferObj *chunk_buffer, u32 doc_offset)
     if (state_.doc_offsets.capacity() < state_.doc_offsets.size() + chunk_doc_num) {
         state_.doc_offsets.reserve(std::max(state_.doc_offsets.size() + chunk_doc_num, state_.doc_offsets.size() * 2));
     }
-    if (state_.centroid_ids.capacity() < state_.centroid_ids.size() + chunk_embedding_num) {
-        state_.centroid_ids.reserve(std::max(state_.centroid_ids.size() + chunk_embedding_num, state_.centroid_ids.size() * 2));
+    if (state_.centroid_ids.capacity() < required_centroid_count) {
+        state_.centroid_ids.reserve(std::max(required_centroid_count, state_.centroid_ids.size() * 2));
     }
 
     // Append doc_lens

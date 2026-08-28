@@ -133,12 +133,21 @@ Status LocalFileHandle::Seek(u64 nbytes) {
     return Status::OK();
 }
 
-i64 LocalFileHandle::FileSize() {
+i64 LocalFileHandle::FileSize() const {
     struct stat s{};
     if (fstat(fd_, &s) == -1) {
         return -1;
     }
     return s.st_size;
+}
+
+i64 LocalFileHandle::RemainingBytes() const {
+    const off_t current = lseek(fd_, 0, SEEK_CUR);
+    const i64 file_size = FileSize();
+    if (current < 0 || file_size < 0 || current > file_size) {
+        return -1;
+    }
+    return file_size - current;
 }
 
 std::tuple<char *, size_t, Status> LocalFileHandle::MmapRead(const std::string &name) { return {nullptr, 0, Status::OK()}; }

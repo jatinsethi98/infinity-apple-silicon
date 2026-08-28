@@ -67,6 +67,57 @@ import std.compat;
 #define _GLIBCXX_FUTURE 1
 #define _GLIBCXX_QUEUE 1
 
+#if defined(__APPLE__)
+// libc++ headers are already owned by the imported std module.
+#define _LIBCPP_FILESYSTEM
+#define _LIBCPP_CODECVT
+#define _LIBCPP_STRING
+#define _LIBCPP_STRING_VIEW
+#define _LIBCPP_VECTOR
+#define _LIBCPP_ALGORITHM
+#define _LIBCPP_IOMANIP
+#define _LIBCPP_LOCALE
+#define _LIBCPP_SSTREAM
+#define _LIBCPP_UTILITY
+#define _LIBCPP_CMATH
+#define _LIBCPP_MEMORY
+#define _LIBCPP_TUPLE
+#define _LIBCPP_FSTREAM
+#define _LIBCPP_IOSTREAM
+#define _LIBCPP_FUNCTIONAL
+#define _LIBCPP_MAP
+#define _LIBCPP_SET
+#define _LIBCPP_ITERATOR
+#define _LIBCPP_NUMERIC
+#define _LIBCPP_ATOMIC
+#define _LIBCPP_CHRONO
+#define _LIBCPP_CONDITION_VARIABLE
+#define _LIBCPP_MUTEX
+#define _LIBCPP_THREAD
+#define _LIBCPP_UNORDERED_MAP
+#define _LIBCPP_ARRAY
+#define _LIBCPP_FORWARD_LIST
+#define _LIBCPP_OPTIONAL
+#define _LIBCPP_RANGES
+#define _LIBCPP_ISTREAM
+#define _LIBCPP_IOS
+#define _LIBCPP_OSTREAM
+#define _LIBCPP_CHARCONV
+#define _LIBCPP_SHARED_MUTEX
+#define _LIBCPP_LIST
+#define _LIBCPP_UNORDERED_SET
+#define _LIBCPP_VARIANT
+#define _LIBCPP_STREAMBUF
+#define _LIBCPP_BITSET
+#define _LIBCPP_DEQUE
+#define _LIBCPP_SPAN
+#define _LIBCPP_FUTURE
+#define _LIBCPP_QUEUE
+#define _LIBCPP_VALARRAY
+
+#include <pthread.h>
+#endif
+
 #include <cerrno>
 
 #include <CLI/CLI.hpp>

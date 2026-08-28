@@ -86,10 +86,10 @@ public:
     void WaitFlushOp(Storage *storage) {
         auto *txn_mgr = storage->new_txn_manager();
         auto *wal_manager = storage->wal_manager();
-        NewTxn *new_txn = nullptr;
-        do {
+        auto *new_txn = txn_mgr->BeginTxn(std::make_unique<std::string>("checkpoint"), TransactionType::kNewCheckpoint);
+        while (new_txn == nullptr) {
             new_txn = txn_mgr->BeginTxn(std::make_unique<std::string>("checkpoint"), TransactionType::kNewCheckpoint);
-        } while (new_txn == nullptr); // wait until we get a new transaction, which means no other checkpoint is running
+        } // wait until we get a new transaction, which means no other checkpoint is running
         TxnTimeStamp max_commit_ts{};
         i64 wal_size{};
         std::tie(max_commit_ts, wal_size) = wal_manager->GetCommitState();

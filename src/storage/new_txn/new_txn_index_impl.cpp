@@ -133,19 +133,14 @@ Status NewTxn::DumpMemIndex(const std::string &db_name, const std::string &table
             continue;
         }
 
-        if (!mem_index->TrySetIsDumping()) {
-            continue;
-        }
-
         ChunkID chunk_id = 0;
         std::tie(chunk_id, status) = segment_index_meta.GetAndSetNextChunkID();
         if (!status.ok()) {
-            mem_index->SetIsDumping(false);
             return status;
         }
 
         // Dump Mem Index
-        status = this->DumpSegmentMemIndex(segment_index_meta, chunk_id);
+        status = this->DumpSegmentMemIndex(segment_index_meta, chunk_id, mem_index);
         if (!status.ok() && status.code() != ErrorCode::kEmptyMemIndex) {
             return status;
         }
@@ -188,16 +183,6 @@ Status NewTxn::DumpMemIndex(const std::string &db_name,
                              begin_row_id.ToUint64()));
         return Status::OK();
     }
-    if (!mem_index->TrySetIsDumping()) {
-        LOG_WARN(fmt::format("NewTxn::DumpMemIndex skipped dumping MemIndex {}.{}.{}.{}.{} since it is already being dumped",
-                             db_name,
-                             table_name,
-                             index_name,
-                             segment_id,
-                             begin_row_id.ToUint64()));
-        return Status::OK();
-    }
-
     // Put the data into local txn store
     DumpMemIndexTxnStore *txn_store{};
     if (base_txn_store_ == nullptr) {
@@ -220,12 +205,11 @@ Status NewTxn::DumpMemIndex(const std::string &db_name,
     ChunkID chunk_id = 0;
     std::tie(chunk_id, status) = segment_index_meta.GetAndSetNextChunkID();
     if (!status.ok()) {
-        mem_index->SetIsDumping(false);
         return status;
     }
 
     // Dump Mem Index
-    status = this->DumpSegmentMemIndex(segment_index_meta, chunk_id);
+    status = this->DumpSegmentMemIndex(segment_index_meta, chunk_id, mem_index);
     if (!status.ok() && status.code() != ErrorCode::kEmptyMemIndex) {
         return status;
     }
@@ -796,6 +780,13 @@ NewTxn::AppendMemIndex(SegmentIndexMeta &segment_index_meta, BlockID block_id, c
     }
     LOG_INFO("AppendMemIndex: before GetMemIndex");
     std::shared_ptr<MemIndex> mem_index = segment_index_meta.GetMemIndex(true);
+    bool update_ended = false;
+    DeferFn update_end([&] {
+        if (!update_ended) {
+            mem_index->UpdateEnd();
+            LOG_TRACE(fmt::format("NewTxn::AppendMemIndex UpdateEnd: mem_index {:p}", static_cast<void *>(mem_index.get())));
+        }
+    });
     LOG_INFO(fmt::format("AppendMemIndex: after GetMemIndex, ptr={}", static_cast<void *>(mem_index.get())));
     bool is_null = mem_index->IsNull();
     LOG_INFO(fmt::format("AppendMemIndex: is_null={}", is_null));
@@ -1017,6 +1008,7 @@ NewTxn::AppendMemIndex(SegmentIndexMeta &segment_index_meta, BlockID block_id, c
         }
     }
     mem_index->UpdateEnd();
+    update_ended = true;
     LOG_TRACE(fmt::format("NewTxn::AppendMemIndex UpdateEnd: mem_index {:p}", static_cast<void *>(mem_index.get())));
 
     // // Trigger dump if necessary
@@ -2518,36 +2510,36 @@ Status NewTxn::ReplayAlterIndexByParams(WalCmdAlterIndexV2 *alter_index_cmd) {
                               std::move(alter_index_cmd->params_));
 }
 
-Status NewTxn::DumpSegmentMemIndex(SegmentIndexMeta &segment_index_meta, const ChunkID &new_chunk_id) {
-    // Check index type before popping mem index. For EMVB, if the index is not built yet,
-    // we must not pop it — the mem index must stay in the catalog so that searches can still
-    // fall back to exhaustive scan on the small (unbuilt) mem index.
+Status
+NewTxn::DumpSegmentMemIndex(SegmentIndexMeta &segment_index_meta, const ChunkID &new_chunk_id, const std::shared_ptr<MemIndex> &expected_mem_index) {
+    auto mem_index = segment_index_meta.TryReserveMemIndexForDump(expected_mem_index);
+    if (mem_index == nullptr) {
+        return Status::EmptyMemIndex();
+    }
+
+    DeferFn dump_done([&] {
+        mem_index->SetIsDumping(false);
+        auto *storage = InfinityContext::instance().storage();
+        if (storage != nullptr) {
+            auto *memindex_tracer = storage->memindex_tracer();
+            if (memindex_tracer != nullptr) {
+                memindex_tracer->DumpDone(mem_index);
+            }
+        }
+    });
+
+    mem_index->WaitUpdate();
+    LOG_TRACE(fmt::format("NewTxn::DumpSegmentMemIndex WaitUpdate mem_index {:p}", static_cast<void *>(mem_index.get())));
+
     auto &table_index_meta = segment_index_meta.table_index_meta();
     auto [index_base, index_status] = table_index_meta.GetIndexBase();
     if (!index_status.ok()) {
         return index_status;
     }
-    if (index_base->index_type_ == IndexType::kEMVB) {
-        auto check_mem_index = segment_index_meta.GetMemIndex();
-        if (check_mem_index != nullptr) {
-            auto check_emvb = check_mem_index->GetEMVBIndex();
-            if (check_emvb != nullptr && !check_emvb->IsBuilt()) {
-                check_mem_index->SetIsDumping(false);
-                return Status::EmptyMemIndex();
-            }
-        }
-    }
-
-    auto mem_index = segment_index_meta.PopMemIndex();
-    if (mem_index == nullptr ||
-        (mem_index->GetBaseMemIndex() == nullptr && mem_index->GetEMVBIndex() == nullptr && mem_index->GetSMVEIndex() == nullptr)) {
-        return Status::EmptyMemIndex();
-    }
-    mem_index->WaitUpdate();
-    LOG_TRACE(fmt::format("NewTxn::DumpSegmentMemIndex WaitUpdate mem_index {:p}", static_cast<void *>(mem_index.get())));
 
     std::shared_ptr<SecondaryIndexInMem> memory_secondary_index;
     std::shared_ptr<IVFIndexInMem> memory_ivf_index;
+    std::shared_ptr<MemoryIndexer> memory_indexer;
     std::shared_ptr<HnswIndexInMem> memory_hnsw_index;
     std::shared_ptr<BMPIndexInMem> memory_bmp_index;
     std::shared_ptr<EMVBIndexInMem> memory_emvb_index;
@@ -2565,11 +2557,10 @@ Status NewTxn::DumpSegmentMemIndex(SegmentIndexMeta &segment_index_meta, const C
             break;
         }
         case IndexType::kFullText: {
-            auto memory_indexer = mem_index->GetFulltextIndex();
+            memory_indexer = mem_index->GetFulltextIndex();
             if (memory_indexer == nullptr) {
                 return Status::EmptyMemIndex();
             }
-            memory_indexer->Dump(false /*offline*/, false /*spill*/);
             break;
         }
         case IndexType::kIVF: {
@@ -2584,6 +2575,9 @@ Status NewTxn::DumpSegmentMemIndex(SegmentIndexMeta &segment_index_meta, const C
             if (memory_hnsw_index == nullptr) {
                 return Status::EmptyMemIndex();
             }
+            if (memory_hnsw_index->IsBuildFailed()) {
+                return Status::InvalidMemIndex("HNSW build failed; rebuild the in-memory index before dumping");
+            }
             break;
         }
         case IndexType::kBMP: {
@@ -2596,6 +2590,9 @@ Status NewTxn::DumpSegmentMemIndex(SegmentIndexMeta &segment_index_meta, const C
         case IndexType::kEMVB: {
             memory_emvb_index = mem_index->GetEMVBIndex();
             if (memory_emvb_index == nullptr) {
+                return Status::EmptyMemIndex();
+            }
+            if (!memory_emvb_index->IsBuilt()) {
                 return Status::EmptyMemIndex();
             }
             break;
@@ -2621,6 +2618,10 @@ Status NewTxn::DumpSegmentMemIndex(SegmentIndexMeta &segment_index_meta, const C
         default: {
             UnrecoverableError("Not implemented yet");
         }
+    }
+
+    if (memory_indexer != nullptr) {
+        memory_indexer->Dump(false /*offline*/, false /*spill*/);
     }
 
     // NOTE: ChunkIndexMetaInfo::term_cnt_ is unstable before MemoryIndexer::Dump()!
@@ -2754,14 +2755,10 @@ Status NewTxn::DumpSegmentMemIndex(SegmentIndexMeta &segment_index_meta, const C
         }
     }
 
-    mem_index->ClearMemIndex();
-    auto *storage = InfinityContext::instance().storage();
-    if (storage != nullptr) {
-        auto *memindex_tracer = storage->memindex_tracer();
-        if (memindex_tracer != nullptr) {
-            memindex_tracer->DumpDone(mem_index);
-        }
+    if (!segment_index_meta.PopReservedMemIndex(mem_index)) {
+        return Status::UnexpectedError("Reserved MemIndex identity changed before dump completion");
     }
+    mem_index->ClearMemIndex();
     return Status::OK();
 }
 
@@ -3175,18 +3172,12 @@ Status NewTxn::ManualDumpIndex(const std::string &db_name, const std::string &ta
                 LOG_INFO(fmt::format("Skipping segment {} - no memory index to dump", segment_id));
                 continue;
             }
-            if (!mem_index->TrySetIsDumping()) {
-                LOG_INFO(fmt::format("Skipping segment {} - already being dumped by another thread", segment_id));
-                continue;
-            }
-
             // 4.5. Additional check for EMVB index - ensure it's built before dumping
 
             // 5. Allocate new chunk ID for this dump
             ChunkID chunk_id = 0;
             std::tie(chunk_id, status) = segment_index_meta.GetAndSetNextChunkID();
             if (!status.ok()) {
-                mem_index->SetIsDumping(false);
                 return status;
             }
 
@@ -3198,7 +3189,7 @@ Status NewTxn::ManualDumpIndex(const std::string &db_name, const std::string &ta
             }
 
             // 7. Actually dump the memory index to disk
-            status = DumpSegmentMemIndex(segment_index_meta, chunk_id);
+            status = DumpSegmentMemIndex(segment_index_meta, chunk_id, mem_index);
             if (!status.ok() && status.code() != ErrorCode::kEmptyMemIndex) {
                 return status;
             }
@@ -3228,6 +3219,12 @@ Status NewTxn::PopulateSMVEIndexInner(std::shared_ptr<IndexBase> index_base,
                                       std::shared_ptr<ColumnDef> column_def,
                                       std::vector<ChunkID> &new_chunk_ids) {
     auto mem_index = segment_index_meta.GetMemIndex(true);
+    bool update_ended = false;
+    DeferFn update_end([&] {
+        if (!update_ended) {
+            mem_index->UpdateEnd();
+        }
+    });
     std::shared_ptr<SMVEIndexInMem> memory_smve_index;
     bool is_null = true;
 
@@ -3263,6 +3260,7 @@ Status NewTxn::PopulateSMVEIndexInner(std::shared_ptr<IndexBase> index_base,
     }
 
     mem_index->UpdateEnd();
+    update_ended = true;
 
     ChunkID new_chunk_id = 0;
     std::tie(new_chunk_id, status) = segment_index_meta.GetAndSetNextChunkID();
@@ -3272,7 +3270,7 @@ Status NewTxn::PopulateSMVEIndexInner(std::shared_ptr<IndexBase> index_base,
 
     new_chunk_ids.push_back(new_chunk_id);
 
-    status = DumpSegmentMemIndex(segment_index_meta, new_chunk_id);
+    status = DumpSegmentMemIndex(segment_index_meta, new_chunk_id, mem_index);
     if (!status.ok()) {
         return status;
     }

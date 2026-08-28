@@ -14,6 +14,7 @@
 
 module;
 
+#include <cstdlib>
 #include "unit_test/gtest_expand.h"
 
 module infinity_core:ut.config;
@@ -35,7 +36,7 @@ TEST_F(ConfigTest, test1) {
     using namespace infinity;
     std::shared_ptr<std::string> path = nullptr;
     Config config;
-    auto status = config.Init(path, nullptr);
+    auto status = config.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     ASSERT_TRUE(status.ok());
 
     EXPECT_EQ(config.Version(), "0.7.3");
@@ -83,7 +84,7 @@ TEST_F(ConfigTest, test2) {
     using namespace infinity;
     std::shared_ptr<std::string> path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/infinity_conf.toml");
     Config config;
-    auto status = config.Init(path, nullptr);
+    auto status = config.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     ASSERT_TRUE(status.ok());
 
     EXPECT_EQ(config.Version(), "0.7.3");
@@ -135,7 +136,7 @@ TEST_F(ConfigTest, TestWrongParamNames) {
     using namespace infinity;
     std::shared_ptr<std::string> path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_invalid_param.toml");
     Config config;
-    auto status = config.Init(path, nullptr);
+    auto status = config.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     ASSERT_FALSE(status.ok());
 }
 
@@ -143,32 +144,32 @@ TEST_F(ConfigTest, TestConfInvalidValues) {
     using namespace infinity;
     std::shared_ptr<std::string> path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_invalid_version.toml");
     Config config_invalid_version;
-    auto status = config_invalid_version.Init(path, nullptr);
+    auto status = config_invalid_version.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kMismatchVersion);
 
     Config config_invalid_timezone;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_invalid_timezone.toml");
-    status = config_invalid_timezone.Init(path, nullptr);
+    status = config_invalid_timezone.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidTimezone);
 
     Config config_invalid_server_address;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_invalid_server_address.toml");
-    status = config_invalid_server_address.Init(path, nullptr);
+    status = config_invalid_server_address.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidIPAddr);
 
     Config config_invalid_bytesize;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_invalid_bytesize.toml");
-    status = config_invalid_bytesize.Init(path, nullptr);
+    status = config_invalid_bytesize.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidByteSize);
 
     Config config_invalid_log_level;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_invalid_log_level.toml");
-    status = config_invalid_log_level.Init(path, nullptr);
+    status = config_invalid_log_level.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidLogLevel);
 
     Config config_invalid_timeinfo;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_invalid_timeinfo.toml");
-    status = config_invalid_timeinfo.Init(path, nullptr);
+    status = config_invalid_timeinfo.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidTimeInfo);
 }
 
@@ -177,27 +178,27 @@ TEST_F(ConfigTest, TestOutofRangeValues) {
     using namespace infinity;
     std::shared_ptr<std::string> path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_out_of_bound_bytesize.toml");
     Config config_bytesize;
-    auto status = config_bytesize.Init(path, nullptr);
+    auto status = config_bytesize.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidConfig);
 
     Config config_number;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_out_of_bound_number.toml");
-    status = config_number.Init(path, nullptr);
+    status = config_number.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidConfig);
 
     Config config_timeinfo;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_out_of_bound_timeinfo.toml");
-    status = config_timeinfo.Init(path, nullptr);
+    status = config_timeinfo.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidConfig);
 
     Config config_timezone;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_out_of_bound_timezone.toml");
-    status = config_timezone.Init(path, nullptr);
+    status = config_timezone.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidConfig);
 
     Config config_walflush;
     path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_out_of_bound_walflush.toml");
-    status = config_walflush.Init(path, nullptr);
+    status = config_walflush.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     EXPECT_EQ(status.code(), ErrorCode::kInvalidConfig);
 }
 
@@ -205,7 +206,7 @@ TEST_F(ConfigTest, TestValidValues) {
     using namespace infinity;
     std::shared_ptr<std::string> path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_conf_valid_value.toml");
     Config config;
-    auto status = config.Init(path, nullptr);
+    auto status = config.Init(path, nullptr, ConfigPathPolicy::kPreserveConfiguredPaths);
     ASSERT_TRUE(status.ok());
 
     EXPECT_EQ(config.Version(), "0.7.3");
@@ -258,3 +259,51 @@ TEST_F(ConfigTest, TestValidValues) {
     // persistence
     EXPECT_EQ(config.PersistenceDir(), "/var/infinity/persistence");
 }
+
+#ifdef __APPLE__
+TEST_F(ConfigTest, TestRuntimePathOverride) {
+    const char *test_home = std::getenv("INFINITY_TEST_HOME");
+    ASSERT_NE(test_home, nullptr);
+    ASSERT_NE(test_home[0], '\0');
+
+    DefaultConfig defaults;
+    defaults.default_log_dir_ = "/var/infinity";
+    defaults.default_data_dir_ = "/var/infinity/data";
+    defaults.default_catalog_dir_ = "/var/infinity2/catalog";
+    defaults.default_persistence_dir_.clear();
+    defaults.default_temp_dir_ = "/custom/tmp";
+    defaults.default_wal_dir_ = "/var/infinity/wal";
+
+    Config config;
+    auto status = config.Init(nullptr, &defaults);
+    ASSERT_TRUE(status.ok());
+
+    EXPECT_EQ(config.LogDir(), test_home);
+    EXPECT_EQ(config.DataDir(), (std::filesystem::path(test_home) / "data").string());
+    EXPECT_EQ(config.CatalogDir(), "/var/infinity2/catalog");
+    EXPECT_TRUE(config.PersistenceDir().empty());
+    EXPECT_EQ(config.TempDir(), "/custom/tmp");
+    EXPECT_EQ(config.WALDir(), (std::filesystem::path(test_home) / "wal").string());
+}
+
+TEST_F(ConfigTest, TestRuntimePathOverrideFromToml) {
+    const char *test_home = std::getenv("INFINITY_TEST_HOME");
+    ASSERT_NE(test_home, nullptr);
+    ASSERT_NE(test_home[0], '\0');
+
+    auto path = std::make_shared<std::string>(std::string(test_data_path()) + "/config/test_new.toml");
+    Config config;
+    auto status = config.Init(path, nullptr);
+    ASSERT_TRUE(status.ok());
+
+    const std::filesystem::path home_path(test_home);
+    EXPECT_EQ(config.LogDir(), (home_path / "log").string());
+    EXPECT_EQ(config.DataDir(), (home_path / "data").string());
+    EXPECT_EQ(config.CatalogDir(), (home_path / "catalog").string());
+    EXPECT_EQ(config.SnapshotDir(), (home_path / "snapshot").string());
+    EXPECT_EQ(config.PersistenceDir(), (home_path / "persistence").string());
+    EXPECT_EQ(config.TempDir(), (home_path / "tmp").string());
+    EXPECT_EQ(config.WALDir(), (home_path / "wal").string());
+    EXPECT_EQ(config.ResourcePath(), "/usr/share/infinity/resource");
+}
+#endif

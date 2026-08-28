@@ -274,7 +274,7 @@ TEST_F(LowCardinalitySecondaryIndexTest, TestSaveLoadLowCardinality) {
     auto key_count = index->GetUniqueKeyCount();
 
     // Save data
-    std::string tmp_path = fmt::format("{}/{}", "/var/infinity/tmp", "test001.idx");
+    std::string tmp_path = fmt::format("{}/{}", GetFullTmpDir(), "test001.idx");
     auto [file, status] = VirtualStore::Open(tmp_path, FileAccessMode::kWrite);
     EXPECT_TRUE(status.ok());
     index->SaveIndexInner(*file);

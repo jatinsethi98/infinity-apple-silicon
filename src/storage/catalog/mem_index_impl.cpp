@@ -93,6 +93,7 @@ void MemIndex::ClearMemIndex() {
     memory_smve_index_.reset();
 
     is_dumping_ = false;
+    cv_.notify_all();
 }
 
 const BaseMemIndex *MemIndex::GetBaseMemIndex() const {
@@ -218,6 +219,9 @@ bool MemIndex::IsDumping() const {
 void MemIndex::SetIsDumping(bool is_dumping) {
     std::unique_lock<std::mutex> lock(mtx_);
     is_dumping_ = is_dumping;
+    if (!is_dumping_) {
+        cv_.notify_all();
+    }
 }
 bool MemIndex::TrySetIsDumping() {
     std::unique_lock<std::mutex> lock(mtx_);
@@ -228,9 +232,23 @@ bool MemIndex::TrySetIsDumping() {
     return true;
 }
 
+bool MemIndex::TryUpdateBegin() {
+    std::unique_lock<std::mutex> lock(mtx_);
+    if (is_updating_ || is_dumping_) {
+        return false;
+    }
+    is_updating_ = true;
+    return true;
+}
+
+void MemIndex::WaitUntilUpdateAllowed() {
+    std::unique_lock<std::mutex> lock(mtx_);
+    cv_.wait(lock, [this] { return !is_updating_ && !is_dumping_; });
+}
+
 void MemIndex::UpdateBegin() {
     std::unique_lock<std::mutex> lock(mtx_);
-    cv_.wait(lock, [this] { return !is_updating_; });
+    cv_.wait(lock, [this] { return !is_updating_ && !is_dumping_; });
     is_updating_ = true;
 }
 
@@ -240,7 +258,7 @@ void MemIndex::UpdateEnd() {
         LOG_CRITICAL("MemIndex::UpdateEnd is_updating_ is false");
     }
     is_updating_ = false;
-    cv_.notify_one();
+    cv_.notify_all();
 }
 
 void MemIndex::WaitUpdate() {

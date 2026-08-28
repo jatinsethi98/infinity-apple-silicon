@@ -28,6 +28,11 @@ export constexpr std::string_view enable_profile_name = "enable_profile";
 export constexpr std::string_view worker_cpu_limit = "cpu_count";
 export constexpr std::string_view log_level = "log_level";
 
+export enum class ConfigPathPolicy {
+    kApplyRuntimeOverride,
+    kPreserveConfiguredPaths,
+};
+
 export struct DefaultConfig {
     LogLevel default_log_level_{LogLevel::kInfo};
     bool default_log_to_stdout_{false};
@@ -46,7 +51,9 @@ public:
     Config();
     ~Config();
 
-    Status Init(const std::shared_ptr<std::string> &config_path, DefaultConfig *default_config);
+    Status Init(const std::shared_ptr<std::string> &config_path,
+                DefaultConfig *default_config,
+                ConfigPathPolicy path_policy = ConfigPathPolicy::kApplyRuntimeOverride);
 
     void PrintAll();
 

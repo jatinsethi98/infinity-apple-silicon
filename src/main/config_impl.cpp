@@ -14,6 +14,7 @@
 
 module;
 
+#include <cstdlib>
 #include <unistd.h>
 
 module infinity_core:config.impl;
@@ -123,7 +124,7 @@ Status Config::ParseTimeInfo(const std::string &time_info, i64 &time_seconds) {
     return Status::OK();
 }
 
-Status Config::Init(const std::shared_ptr<std::string> &config_path, DefaultConfig *default_config) {
+Status Config::Init(const std::shared_ptr<std::string> &config_path, DefaultConfig *default_config, ConfigPathPolicy path_policy) {
     toml::table config_toml{};
     if (config_path.get() != nullptr) {
         LOG_INFO(fmt::format("Config file: {}", *config_path));
@@ -2541,6 +2542,46 @@ Status Config::Init(const std::shared_ptr<std::string> &config_path, DefaultConf
             }
         }
     }
+
+#ifdef __APPLE__
+    if (path_policy == ConfigPathPolicy::kApplyRuntimeOverride) {
+        const char *test_home = std::getenv("INFINITY_TEST_HOME");
+        if (test_home != nullptr && test_home[0] != '\0') {
+            constexpr std::string_view infinity_home = "/var/infinity";
+            constexpr std::array path_options = {
+                GlobalOptionIndex::kLogDir,
+                GlobalOptionIndex::kDataDir,
+                GlobalOptionIndex::kCatalogDir,
+                GlobalOptionIndex::kSnapshotDir,
+                GlobalOptionIndex::kPersistenceDir,
+                GlobalOptionIndex::kTempDir,
+                GlobalOptionIndex::kWALDir,
+            };
+
+            for (const auto option_index : path_options) {
+                BaseOption *base_option = global_options_.GetOptionByIndex(option_index);
+                if (base_option == nullptr || base_option->data_type_ != BaseOptionDataType::kString) {
+                    UnrecoverableError("Invalid path option while applying INFINITY_TEST_HOME");
+                }
+
+                auto *path_option = static_cast<StringOption *>(base_option);
+                const std::string &path = path_option->value_;
+                const bool is_infinity_home = path == infinity_home;
+                const bool is_infinity_descendant =
+                    path.size() > infinity_home.size() && path.compare(0, infinity_home.size(), infinity_home) == 0 &&
+                    path[infinity_home.size()] == '/';
+                if (is_infinity_home) {
+                    path_option->value_ = std::filesystem::path(test_home).string();
+                } else if (is_infinity_descendant) {
+                    path_option->value_ =
+                        (std::filesystem::path(test_home) / path.substr(infinity_home.size() + 1)).string();
+                }
+            }
+        }
+    }
+#else
+    (void)path_policy;
+#endif
 
     return Status::OK();
 }

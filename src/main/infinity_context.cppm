@@ -20,6 +20,7 @@ import :storage;
 import :task_scheduler;
 import :cluster_manager;
 
+import std;
 import third_party;
 
 import admin_statement;
@@ -33,6 +34,26 @@ struct Config;
 
 export class InfinityContext : public Singleton<InfinityContext> {
 public:
+    class HnswBuildThreadPoolLease {
+    public:
+        HnswBuildThreadPoolLease(const HnswBuildThreadPoolLease &) = delete;
+        HnswBuildThreadPoolLease &operator=(const HnswBuildThreadPoolLease &) = delete;
+        HnswBuildThreadPoolLease(HnswBuildThreadPoolLease &&) noexcept = default;
+        HnswBuildThreadPoolLease &operator=(HnswBuildThreadPoolLease &&) = delete;
+
+        [[nodiscard]] ctpl::thread_pool &Get() & noexcept { return *thread_pool_; }
+        ctpl::thread_pool &Get() && = delete;
+
+    private:
+        friend class InfinityContext;
+
+        HnswBuildThreadPoolLease(std::shared_mutex &lifecycle_mutex, ctpl::thread_pool &thread_pool)
+            : lifecycle_lock_(lifecycle_mutex), thread_pool_(&thread_pool) {}
+
+        std::shared_lock<std::shared_mutex> lifecycle_lock_;
+        ctpl::thread_pool *thread_pool_;
+    };
+
     [[nodiscard]] inline TaskScheduler *task_scheduler() noexcept { return task_scheduler_.get(); }
 
     [[nodiscard]] inline Config *config() noexcept { return config_.get(); }
@@ -52,7 +73,10 @@ public:
     [[nodiscard]] inline ctpl::thread_pool &GetFulltextInvertingThreadPool() { return inverting_thread_pool_; }
     [[nodiscard]] inline ctpl::thread_pool &GetFulltextCommitingThreadPool() { return commiting_thread_pool_; }
     [[nodiscard]] inline ctpl::thread_pool &GetLsgBuildThreadPool() { return lsg_build_thread_pool_; }
-    [[nodiscard]] inline ctpl::thread_pool &GetHnswBuildThreadPool() { return hnsw_build_thread_pool_; }
+    [[nodiscard]] inline HnswBuildThreadPoolLease AcquireHnswBuildThreadPool() {
+        return HnswBuildThreadPoolLease(hnsw_build_thread_pool_lifecycle_mutex_, hnsw_build_thread_pool_);
+    }
+    void ResizeHnswBuildThreadPool(int worker_count);
 
     NodeRole GetServerRole() const;
 
@@ -103,6 +127,7 @@ private:
 
     // For hnsw index
     ctpl::thread_pool lsg_build_thread_pool_{8};
+    std::shared_mutex hnsw_build_thread_pool_lifecycle_mutex_;
     ctpl::thread_pool hnsw_build_thread_pool_{2};
 
     std::function<void()> start_servers_func_{};

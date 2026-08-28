@@ -84,6 +84,8 @@ public:
     bool IsDumping() const;
     void SetIsDumping(bool is_dumping);
     bool TrySetIsDumping();
+    bool TryUpdateBegin();
+    void WaitUntilUpdateAllowed();
     void UpdateBegin();
     void UpdateEnd();
     void WaitUpdate();

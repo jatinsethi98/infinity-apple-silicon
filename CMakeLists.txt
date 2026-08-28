@@ -1,16 +1,19 @@
-cmake_minimum_required(VERSION 4.0.3...4.3.4)
+cmake_minimum_required(VERSION 4.0.3...4.4.2)
 
 cmake_policy(SET CMP0167 OLD)
 
 set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS TRUE)
 
-if (CMAKE_VERSION GREATER_EQUAL 4.0.3 AND CMAKE_VERSION LESS_EQUAL 4.2.5)
+if (CMAKE_VERSION VERSION_LESS_EQUAL 4.2.5)
     set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "d0edc3af-4c50-42ea-a356-e2862fe7a444")
-else (CMAKE_VERSION GREATER 4.2.5 AND CMAKE_VERSION LESS_EQUAL 4.3.4)
+elseif (CMAKE_VERSION VERSION_LESS 4.4)
     set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
-    # we use clang
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-reserved-module-identifier")
+elseif (CMAKE_VERSION VERSION_LESS 4.5)
+    set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "f35a9ac6-8463-4d38-8eec-5d6008153e7d")
+else ()
+    message(FATAL_ERROR "Unsupported CMake version for experimental import std: ${CMAKE_VERSION}")
 endif ()
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-reserved-module-identifier")
 
 # Auto-detect and set vcpkg toolchain if not already set
 if (NOT CMAKE_TOOLCHAIN_FILE)
@@ -31,6 +34,15 @@ endif ()
 set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_SOURCE_DIR}/ports")
 
 project(infinity VERSION 0.7.3)
+
+if (APPLE AND CMAKE_CXX_STDLIB_MODULES_JSON STREQUAL "libc++.modules.json")
+    get_filename_component(CXX_COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    get_filename_component(CXX_COMPILER_PREFIX "${CXX_COMPILER_BIN_DIR}" DIRECTORY)
+    set(HOMEBREW_LIBCXX_MODULES_JSON "${CXX_COMPILER_PREFIX}/lib/c++/libc++.modules.json")
+    if (EXISTS "${HOMEBREW_LIBCXX_MODULES_JSON}")
+        set(CMAKE_CXX_STDLIB_MODULES_JSON "${HOMEBREW_LIBCXX_MODULES_JSON}")
+    endif ()
+endif ()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,12 +72,14 @@ if (CLANG_VERSION_STRING VERSION_GREATER_EQUAL 20)
 
     # add_compile_options(-ftime-trace)
     #    add_compile_options(-fmodule-header)
-    if (NOT CMAKE_CROSSCOMPILING)
+    if (NOT CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_link_options(-fuse-ld=mold)
     endif ()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-unused-parameter -Wno-unused-private-field")
 
-    add_link_options(-L/usr/local/lib)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_link_options(-L/usr/local/lib)
+    endif ()
     set(CMAKE_FIND_PACKAGE_SORT_ORDER NATURAL)
     set(CMAKE_FIND_PACKAGE_SORT_DIRECTION DEC)
 
@@ -75,11 +89,14 @@ else ()
 
 endif ()
 
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "^arm64.*")
+set(INFINITY_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
+if (APPLE AND CMAKE_OSX_ARCHITECTURES)
+    set(INFINITY_TARGET_PROCESSOR "${CMAKE_OSX_ARCHITECTURES}")
+endif ()
+
+if (INFINITY_TARGET_PROCESSOR MATCHES "^(arm64|aarch64)$")
     set(ARM64 TRUE)
-elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "^aarch64.*")
-    set(ARM64 TRUE)
-elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
+elseif (INFINITY_TARGET_PROCESSOR MATCHES "^(x86_64|amd64)$")
     set(X86_64 TRUE)
 endif ()
 
@@ -88,9 +105,13 @@ if(ARM64)
    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DSIMDE_ENABLE_NATIVE_ALIASES")
 endif ()
 
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -static-libgcc")
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -static-libgcc")
+endif ()
 
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
+find_package(Iconv REQUIRED)
 
 find_package(absl CONFIG REQUIRED)
 find_package(Arrow CONFIG REQUIRED)
@@ -130,7 +151,11 @@ find_package(unofficial-inih CONFIG REQUIRED)
 #find_path(VIT_VIT_CTPL_INCLUDE_DIRS "ctpl_stl.h")
 find_package(ZLIB REQUIRED)
 
-set(VCPKG_PROJECT_ROOT "${CMAKE_CURRENT_BINARY_DIR}/vcpkg_installed")
+if (VCPKG_INSTALLED_DIR)
+    set(VCPKG_PROJECT_ROOT "${VCPKG_INSTALLED_DIR}")
+else ()
+    set(VCPKG_PROJECT_ROOT "${CMAKE_CURRENT_BINARY_DIR}/vcpkg_installed")
+endif ()
 file(GLOB VCPKG_INCLUDE_DIRS
         "${VCPKG_PROJECT_ROOT}/${VCPKG_TARGET_TRIPLET}/include"
 )
@@ -153,9 +178,20 @@ include_directories(${SIMDE_INCLUDE_DIRS})
 
 message(STATUS "Using vcpkg toolchain - automatic package discovery enabled")
 
-# Get current system time and print the build time
-execute_process(COMMAND "date" +"%Y-%m-%d %H:%M.%S" OUTPUT_VARIABLE CURRENT_SYS_TIME)
-string(REGEX REPLACE "\n" "" CURRENT_SYS_TIME ${CURRENT_SYS_TIME})
+# Get current system time and print the build time. Reproducibility-sensitive
+# sibling builds may pin this value so generated module inputs are identical.
+set(INFINITY_BUILD_TIME_OVERRIDE "" CACHE STRING "Override the embedded build timestamp")
+if (INFINITY_BUILD_TIME_OVERRIDE)
+    set(CURRENT_SYS_TIME "${INFINITY_BUILD_TIME_OVERRIDE}")
+else ()
+    execute_process(
+            COMMAND "date" "+%Y-%m-%d %H:%M.%S"
+            OUTPUT_VARIABLE CURRENT_SYS_TIME
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+endif ()
+if (CURRENT_SYS_TIME MATCHES "[\"\r\n]")
+    message(FATAL_ERROR "The embedded build timestamp contains an unsupported character")
+endif ()
 message(STATUS "Build time = ${CURRENT_SYS_TIME}")
 
 # Get git information. WARNING: For functions which invoke execute_process, the variable populated by execute_process is visiable only inside the function!
@@ -289,21 +325,26 @@ else ()
     message(FATAL_ERROR "Only support CMake build type: Debug, RelWithDebInfo, and Release")
 endif ()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror -Wno-asm-operand-widths -Wno-unused-command-line-argument -Wno-deprecated-declarations -Wextra -Wno-unused-parameter -Wno-unused-private-field -pthread -fcolor-diagnostics")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-asm-operand-widths -Wno-unused-command-line-argument -Wno-deprecated-declarations -Wextra -Wno-unused-parameter -Wno-unused-private-field -fcolor-diagnostics")
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -pthread")
+endif ()
 
 MESSAGE(STATUS "C++ Compilation flags: " ${CMAKE_CXX_FLAGS})
 
-if (NOT CMAKE_CROSSCOMPILING)
+if (NOT CMAKE_CROSSCOMPILING AND NOT APPLE)
     add_compile_options(-march=native)
 endif ()
 
-execute_process(
-        COMMAND bash -c "zgrep CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y /proc/config.gz 2>/dev/null; grep CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y /boot/config-$(uname -r) 2>/dev/null"
-        OUTPUT_VARIABLE HAVE_EFFICIENT_UNALIGNED_ACCESS
-        OUTPUT_STRIP_TRAILING_WHITESPACE)
-if ("${HAVE_EFFICIENT_UNALIGNED_ACCESS}" STREQUAL "CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y")
-    message(STATUS "Found CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y")
-    add_definitions(-DHAVE_EFFICIENT_UNALIGNED_ACCESS)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    execute_process(
+            COMMAND bash -c "zgrep CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y /proc/config.gz 2>/dev/null; grep CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y /boot/config-$(uname -r) 2>/dev/null"
+            OUTPUT_VARIABLE HAVE_EFFICIENT_UNALIGNED_ACCESS
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if ("${HAVE_EFFICIENT_UNALIGNED_ACCESS}" STREQUAL "CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y")
+        message(STATUS "Found CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y")
+        add_definitions(-DHAVE_EFFICIENT_UNALIGNED_ACCESS)
+    endif ()
 endif ()
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -325,7 +366,11 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif ()
 
 add_subdirectory(src)
+
+# Vendored C++11 targets do not import the C++23 standard-library modules.
+set(CMAKE_CXX_MODULE_STD OFF)
 add_subdirectory(third_party EXCLUDE_FROM_ALL)
+set(CMAKE_CXX_MODULE_STD ON)
 
 # set parameters for unit test coverage
 # TODO: issue error "cannot merge previous GCDA file" when turn following switch.

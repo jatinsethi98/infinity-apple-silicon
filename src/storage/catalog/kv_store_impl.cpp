@@ -203,7 +203,6 @@ public:
         std::vector<std::string> local_live_files;
         uint64_t manifest_file_size{};
         db->GetLiveFiles(local_live_files, &manifest_file_size);
-        std::flat_set<std::string> local_live_files_set{local_live_files};
 
         for (auto &file : local_live_files) {
             if (IsSstFile(file)) {
@@ -250,11 +249,9 @@ public:
         std::vector<std::string> local_live_files;
         uint64_t manifest_file_size{};
         db->GetLiveFiles(local_live_files, &manifest_file_size, false);
-        std::flat_set<std::string> local_live_files_set{local_live_files};
 
         std::vector<std::string> remote_live_files;
         VirtualStore::ListObjects(S3_DEFAULT_BUCKET, S3_META_PREFIX, remote_live_files);
-        std::flat_set<std::string> remote_live_files_set{remote_live_files};
 
         for (auto &file : local_live_files) {
             if (IsSstFile(file)) {

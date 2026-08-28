@@ -2,6 +2,10 @@ module;
 
 #include "unit_test/gtest_expand.h"
 
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
+
 module infinity_core:ut.persistence_manager;
 
 import :ut.base_test;
@@ -13,6 +17,7 @@ import :persist_result_handler;
 import :local_file_handle;
 import :kv_store;
 import :status;
+import :infinity_exception;
 
 using namespace infinity;
 namespace fs = std::filesystem;
@@ -67,6 +72,7 @@ void PersistenceManagerTest::CheckObjData(const std::string &local_file_path, co
     auto buffer = std::make_unique<char[]>(file_size);
     auto [nread, read_status] = pm_file_handle->Read(buffer.get(), file_size);
     EXPECT_TRUE(read_status.ok());
+    ASSERT_EQ(nread, file_size);
     ASSERT_EQ(std::string(buffer.get(), file_size), data);
 
     PersistWriteResult res = pm_->PutObjCache(local_file_path);
@@ -159,6 +165,103 @@ TEST_F(PersistenceManagerTest, PersistFileMultiThread) {
     for (size_t i = 0; i < file_paths.size(); ++i) {
         CheckObjData(file_paths[i], persist_strs[i]);
     }
+}
+
+TEST_F(PersistenceManagerTest, PersistLargeComposedFileFromBackgroundThread) {
+    constexpr size_t kCopyBufferSize = 1024 * 1024;
+    constexpr size_t kFileSize = kCopyBufferSize + 1048;
+    constexpr size_t kObjectSizeLimit = 2 * kCopyBufferSize;
+
+    handler_.reset();
+    pm_ = std::make_unique<PersistenceManager>(
+        infinity::InfinityContext::instance().storage(), workspace_, file_dir_, kObjectSizeLimit);
+    pm_->SetKvStore(kv_store_.get());
+    handler_ = std::make_unique<PersistResultHandler>(pm_.get());
+
+    const std::string file_path = file_dir_ + "/large_composed_file";
+    std::string expected(kFileSize, '\0');
+    for (size_t idx = 0; idx < expected.size(); ++idx) {
+        expected[idx] = static_cast<char>(idx % 251);
+    }
+    {
+        std::ofstream out_file(file_path, std::ios::binary);
+        ASSERT_TRUE(out_file.is_open());
+        out_file.write(expected.data(), static_cast<std::streamsize>(expected.size()));
+        ASSERT_TRUE(out_file.good());
+    }
+
+    std::optional<PersistWriteResult> write_result;
+    std::exception_ptr worker_error;
+    size_t worker_stack_size = 0;
+    std::thread worker([&] {
+#if defined(__APPLE__)
+        worker_stack_size = pthread_get_stacksize_np(pthread_self());
+#endif
+        try {
+            write_result = pm_->Persist(file_path, file_path);
+        } catch (...) {
+            worker_error = std::current_exception();
+        }
+    });
+    worker.join();
+
+#if defined(__APPLE__)
+    EXPECT_LT(worker_stack_size, kCopyBufferSize);
+#endif
+    ASSERT_FALSE(worker_error);
+    ASSERT_TRUE(write_result.has_value());
+    handler_->HandleWriteResult(*write_result);
+    ASSERT_EQ(write_result->obj_addr_.part_size_, expected.size());
+
+    PersistWriteResult finalize_result = pm_->CurrentObjFinalize();
+    handler_->HandleWriteResult(finalize_result);
+
+    const std::string object_path = pm_->GetObjPath(write_result->obj_addr_.obj_key_);
+    std::ifstream persisted_file(object_path, std::ios::binary);
+    ASSERT_TRUE(persisted_file.is_open());
+    persisted_file.seekg(static_cast<std::streamoff>(write_result->obj_addr_.part_offset_));
+    std::string actual(expected.size(), '\0');
+    persisted_file.read(actual.data(), static_cast<std::streamsize>(actual.size()));
+    ASSERT_EQ(persisted_file.gcount(), static_cast<std::streamsize>(actual.size()));
+    EXPECT_EQ(actual, expected);
+}
+
+TEST_F(PersistenceManagerTest, RejectPhysicalObjectSizeDriftWithoutAdvancingState) {
+    const std::string first_path = file_dir_ + "/first";
+    const std::string second_path = file_dir_ + "/second";
+    const std::string first_data = "first";
+    const std::string second_data = "second";
+    {
+        std::ofstream source(first_path, std::ios::binary);
+        source.write(first_data.data(), static_cast<std::streamsize>(first_data.size()));
+    }
+    PersistWriteResult first_result = pm_->Persist(first_path, first_path);
+    handler_->HandleWriteResult(first_result);
+    const std::string object_path = pm_->GetObjPath(first_result.obj_addr_.obj_key_);
+    ASSERT_EQ(fs::file_size(object_path), first_data.size());
+
+    {
+        std::ofstream object(object_path, std::ios::binary | std::ios::app);
+        object.put('x');
+    }
+    {
+        std::ofstream source(second_path, std::ios::binary);
+        source.write(second_data.data(), static_cast<std::streamsize>(second_data.size()));
+    }
+    EXPECT_THROW_WITHOUT_STACKTRACE((void)pm_->Persist(second_path, second_path), UnrecoverableException);
+    ASSERT_TRUE(fs::exists(second_path));
+    ASSERT_EQ(fs::file_size(object_path), first_data.size() + 1);
+
+    fs::resize_file(object_path, first_data.size());
+    PersistWriteResult second_result = pm_->Persist(second_path, second_path);
+    handler_->HandleWriteResult(second_result);
+    EXPECT_EQ(second_result.obj_addr_.obj_key_, first_result.obj_addr_.obj_key_);
+    EXPECT_EQ(second_result.obj_addr_.part_offset_, PersistenceManager::ObjAlignment);
+
+    PersistWriteResult finalize_result = pm_->CurrentObjFinalize();
+    handler_->HandleWriteResult(finalize_result);
+    CheckObjData(first_path, first_data);
+    CheckObjData(second_path, second_data);
 }
 
 TEST_F(PersistenceManagerTest, CleanupBasic) {

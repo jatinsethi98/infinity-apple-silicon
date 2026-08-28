@@ -152,7 +152,7 @@ void PlaidQuantizer::Train(const f32 *residuals, u64 n_embeddings) {
     bucket_cutoffs_ = std::make_unique<f32[]>(n_buckets_ - 1);
     for (u32 i = 1; i < n_buckets_; ++i) {
         f64 quantile = static_cast<f64>(i) / n_buckets_;
-        u64 idx = static_cast<u64>(quantile * all_residuals.size());
+        size_t idx = static_cast<size_t>(quantile * all_residuals.size());
         idx = std::min(idx, all_residuals.size() - 1);
         bucket_cutoffs_[i - 1] = all_residuals[idx];
     }
@@ -163,7 +163,7 @@ void PlaidQuantizer::Train(const f32 *residuals, u64 n_embeddings) {
     bucket_weights_ = std::make_unique<f32[]>(n_buckets_);
     for (u32 i = 0; i < n_buckets_; ++i) {
         f64 quantile = (static_cast<f64>(i) + 0.5) / n_buckets_;
-        u64 idx = static_cast<u64>(quantile * all_residuals.size());
+        size_t idx = static_cast<size_t>(quantile * all_residuals.size());
         idx = std::min(idx, all_residuals.size() - 1);
         bucket_weights_[i] = all_residuals[idx] + avg_residual_;
     }

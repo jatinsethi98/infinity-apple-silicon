@@ -20,6 +20,7 @@ module infinity_core:ut.test_rabitq;
 
 import :ut.base_test;
 import :data_store;
+import :data_store_util;
 import :vec_store_type;
 import :rabitq_vec_store;
 import :dist_func_l2;
@@ -172,9 +173,9 @@ TEST_F(RabitqTest, test_simple) {
         if (ret < 0) {
             UnrecoverableError("mmap failed");
         }
-        const char *ptr = reinterpret_cast<const char *>(data_ptr);
+        HnswPointerReader reader(reinterpret_cast<const char *>(data_ptr), file_size);
 
-        RabitqVecStoreMeta meta = RabitqVecStoreMeta::LoadFromPtr(ptr);
+        RabitqVecStoreMeta meta = RabitqVecStoreMeta::LoadFromPtr(reader);
         const DataType *rom = meta.rom();
         const DataType *rot_centroid = meta.rot_centroid();
         auto centroid = std::make_unique<DataType[]>(dim_);
@@ -188,7 +189,8 @@ TEST_F(RabitqTest, test_simple) {
             EXPECT_LT(std::fabs(centroid[d] - truth_centroid[d]), std::fabs(truth_centroid[d]) * 1e-5);
         }
 
-        RabitqVecStoreInner inner = RabitqVecStoreInner::LoadFromPtr(ptr, 0, meta);
+        RabitqVecStoreInner inner = RabitqVecStoreInner::LoadFromPtr(reader, vec_n_, meta);
+        reader.RequireEmpty();
         ASSERT_EQ(inner.GetSizeInBytes(vec_n_, meta), write_mem);
     }
 
@@ -335,5 +337,122 @@ TEST_F(RabitqTest, test_distance) {
 
         // output
         std::cout << fmt::format("id: {}, truth distance: {:.2f}, estimate distance: {:.2f}", id, truth_dis, estimate_dis) << std::endl;
+    }
+}
+
+TEST_F(RabitqTest, compact_unaligned_records_and_padded_dimension) {
+    constexpr size_t origin_dim = 129;
+    constexpr size_t vec_n = 9;
+    using VecStoreType = RabitqL2VecStoreType<DataType>;
+    using OwnedMeta = VecStoreType::Meta<true>;
+    using OwnedInner = VecStoreType::Inner<true>;
+    using MappedMeta = VecStoreType::Meta<false>;
+    using MappedInner = VecStoreType::Inner<false>;
+
+    std::vector<DataType> data(origin_dim * vec_n);
+    std::vector<DataType> expected_centroid(origin_dim, 0);
+    for (size_t row = 0; row < vec_n; ++row) {
+        for (size_t column = 0; column < origin_dim; ++column) {
+            const DataType value = static_cast<DataType>(static_cast<i32>((row * 17 + column * 11) % 67) - 33) / static_cast<DataType>(19);
+            data[row * origin_dim + column] = value;
+            expected_centroid[column] += value;
+        }
+    }
+    for (DataType &value : expected_centroid) {
+        value /= static_cast<DataType>(vec_n);
+    }
+
+    OwnedMeta meta = OwnedMeta::Make(origin_dim);
+    size_t optimize_mem_usage = 0;
+    meta.Optimize<LabelType>(DenseVectorIter<DataType, LabelType>(data.data(), origin_dim, vec_n), {}, optimize_mem_usage);
+    ASSERT_EQ(meta.dim(), 136u);
+    ASSERT_NE(meta.compress_data_size() % alignof(DataType), 0u);
+
+    std::vector<DataType> recovered_centroid(meta.dim(), 0);
+    matrixA_multiply_transpose_matrixB_output_to_C(meta.rot_centroid(), meta.rom(), 1, meta.dim(), meta.dim(), recovered_centroid.data());
+    for (size_t column = 0; column < origin_dim; ++column) {
+        EXPECT_NEAR(recovered_centroid[column], expected_centroid[column], 2e-4f);
+    }
+    for (size_t column = origin_dim; column < meta.dim(); ++column) {
+        EXPECT_NEAR(recovered_centroid[column], 0.0f, 2e-4f);
+    }
+
+    size_t mem_usage = 0;
+    OwnedInner inner = OwnedInner::Make(vec_n, meta, mem_usage);
+    for (size_t row = 0; row < vec_n; ++row) {
+        inner.SetVec(row, data.data() + row * origin_dim, meta, mem_usage);
+    }
+    ASSERT_EQ(mem_usage, vec_n * meta.compress_data_size());
+
+    auto verify = [&](const auto &loaded_meta, const auto &loaded_inner) {
+        ASSERT_EQ(loaded_meta.origin_dim(), origin_dim);
+        ASSERT_EQ(loaded_meta.dim(), 136u);
+        for (size_t row = 0; row < vec_n; ++row) {
+            const auto encoded = loaded_inner.GetVec(row, loaded_meta);
+            EXPECT_TRUE(std::isfinite(encoded->raw_norm_));
+            EXPECT_TRUE(std::isfinite(encoded->norm_));
+            EXPECT_TRUE(std::isfinite(encoded->sum_));
+            EXPECT_TRUE(std::isfinite(encoded->error_));
+            EXPECT_GE(encoded->sum_, 0.0f);
+            EXPECT_LE(encoded->sum_, static_cast<DataType>(loaded_meta.dim()));
+        }
+    };
+    verify(meta, inner);
+
+    const std::string filepath = file_dir_ + "/rabitq_compact_unaligned.bin";
+    {
+        auto [file_handle, status] = VirtualStore::Open(filepath, FileAccessMode::kWrite);
+        ASSERT_TRUE(status.ok()) << status.message();
+        meta.Save(*file_handle);
+        inner.Save(*file_handle, vec_n, meta);
+    }
+
+    const size_t expected_size =
+        sizeof(size_t) + meta.dim() * meta.dim() * sizeof(DataType) + meta.dim() * sizeof(DataType) + vec_n * meta.compress_data_size();
+    ASSERT_EQ(VirtualStore::GetFileSize(filepath), expected_size);
+
+    {
+        auto [file_handle, status] = VirtualStore::Open(filepath, FileAccessMode::kRead);
+        ASSERT_TRUE(status.ok()) << status.message();
+        OwnedMeta loaded_meta = OwnedMeta::Load(*file_handle);
+        size_t loaded_mem_usage = 0;
+        OwnedInner loaded_inner = OwnedInner::Load(*file_handle, vec_n, vec_n, loaded_meta, loaded_mem_usage);
+        ASSERT_EQ(loaded_mem_usage, mem_usage);
+        verify(loaded_meta, loaded_inner);
+    }
+
+    u8 *mapped_bytes = nullptr;
+    size_t mapped_size = VirtualStore::GetFileSize(filepath);
+    ASSERT_EQ(VirtualStore::MmapFile(filepath, mapped_bytes, mapped_size), 0);
+    {
+        HnswPointerReader reader(reinterpret_cast<const char *>(mapped_bytes), mapped_size);
+        MappedMeta mapped_meta = MappedMeta::LoadFromPtr(reader);
+        MappedInner mapped_inner = MappedInner::LoadFromPtr(reader, vec_n, mapped_meta);
+        reader.RequireEmpty();
+        verify(mapped_meta, mapped_inner);
+    }
+    ASSERT_EQ(VirtualStore::MunmapFile(filepath), 0);
+}
+
+TEST_F(RabitqTest, single_value_centroid_zero_fills_padded_dimensions) {
+    constexpr size_t origin_dim = 1;
+    using VecStoreType = RabitqL2VecStoreType<DataType>;
+    using Meta = VecStoreType::Meta<true>;
+
+    auto data = std::make_unique<DataType[]>(origin_dim);
+    data[0] = 3.5f;
+
+    Meta meta = Meta::Make(origin_dim);
+    size_t mem_usage = 0;
+    meta.Optimize<LabelType>(DenseVectorIter<DataType, LabelType>(data.get(), origin_dim, 1), {}, mem_usage);
+    ASSERT_EQ(meta.origin_dim(), origin_dim);
+    ASSERT_EQ(meta.dim(), 8u);
+
+    std::array<DataType, 8> recovered_centroid{};
+    matrixA_multiply_transpose_matrixB_output_to_C(
+        meta.rot_centroid(), meta.rom(), 1, meta.dim(), meta.dim(), recovered_centroid.data());
+    EXPECT_NEAR(recovered_centroid[0], data[0], 2e-5f);
+    for (size_t dimension = origin_dim; dimension < recovered_centroid.size(); ++dimension) {
+        EXPECT_NEAR(recovered_centroid[dimension], 0.0f, 2e-5f);
     }
 }

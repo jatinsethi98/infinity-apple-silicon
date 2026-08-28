@@ -113,11 +113,10 @@ private:
     std::string ObjCreate();
 
     // Returns the room (size limit - sum_of_parts_size) of current object. User should check before each ObjAppend operation.
-    int CurrentObjRoomNoLock();
+    size_t CurrentObjRoomNoLock();
 
-    // Append file to the current object.
-    // It finalizes current object if new size exceeds the size limit.
-    void CurrentObjAppendNoLock(const std::string &tmp_file_path, size_t file_size);
+    // Append file to the current object and return its aligned part offset.
+    size_t CurrentObjAppendNoLock(const std::string &tmp_file_path, size_t file_size);
 
     // Finalize current object.
     void CurrentObjFinalizeNoLock(std::vector<std::string> &persist_keys);

@@ -503,14 +503,22 @@ void InfinityContext::SetIndexThreadPool() {
     LOG_TRACE("Set index thread pool.");
     inverting_thread_pool_.resize(config_->FulltextIndexBuildingWorker());
     commiting_thread_pool_.resize(config_->FulltextIndexBuildingWorker());
-    hnsw_build_thread_pool_.resize(config_->DenseIndexBuildingWorker());
+    ResizeHnswBuildThreadPool(config_->DenseIndexBuildingWorker());
 }
 
 void InfinityContext::RestoreIndexThreadPoolToDefault() {
     LOG_TRACE("Restore index thread pool size to default.");
     inverting_thread_pool_.resize(config_->FulltextIndexBuildingWorker());
     commiting_thread_pool_.resize(config_->FulltextIndexBuildingWorker());
-    hnsw_build_thread_pool_.resize(config_->DenseIndexBuildingWorker());
+    ResizeHnswBuildThreadPool(config_->DenseIndexBuildingWorker());
+}
+
+void InfinityContext::ResizeHnswBuildThreadPool(int worker_count) {
+    if (hnsw_build_thread_pool_.owns_current_thread()) {
+        throw std::logic_error("HNSW build thread pool worker cannot resize its own pool");
+    }
+    std::unique_lock lifecycle_lock(hnsw_build_thread_pool_lifecycle_mutex_);
+    hnsw_build_thread_pool_.resize(worker_count);
 }
 
 void InfinityContext::AddThriftServerFn(std::function<void()> start_func, std::function<void()> stop_func) {

@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+module;
+
+#if defined(__APPLE__)
+#include <cstdlib>
+#include <execinfo.h>
+#endif
+
 module infinity_core:infinity_exception.impl;
 
 import :infinity_exception;
@@ -45,7 +52,25 @@ void PrintTransactionHistory() {
 void PrintStacktrace(const std::string &err_msg) {
     LOG_CRITICAL(fmt::format("Error: {}", err_msg));
 
+#if defined(__APPLE__)
+    constexpr int kMaxStackFrames = 128;
+    void *frames[kMaxStackFrames];
+    const int frame_count = backtrace(frames, kMaxStackFrames);
+    char **symbols = backtrace_symbols(frames, frame_count);
+    if (symbols == nullptr) {
+        LOG_CRITICAL("Failed to generate stacktrace");
+        return;
+    }
+
+    std::ostringstream trace;
+    for (int idx = 0; idx < frame_count; ++idx) {
+        trace << symbols[idx] << '\n';
+    }
+    std::free(symbols);
+    LOG_CRITICAL(trace.str());
+#else
     LOG_CRITICAL(to_string(std::stacktrace::current()));
+#endif
 }
 
 #define ADD_LOG_INFO

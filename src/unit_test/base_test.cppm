@@ -13,6 +13,7 @@
 // limitations under the License.
 module;
 
+#include <cstdlib>
 #include "unit_test/gtest_expand.h"
 
 export module infinity_core:ut.base_test;
@@ -81,25 +82,46 @@ public:
     static constexpr const char *S3_STORAGE = "test/data/config/test_minio_s3_storage.toml";
 
 protected:
-    const char *GetHomeDir() { return "/var/infinity"; }
+    const char *GetHomeDir() { return ResolvedHomeDir().c_str(); }
 
-    const char *GetFullDataDir() { return "/var/infinity/data"; }
+    const char *GetFullDataDir() {
+        static const std::string path = (fs::path(ResolvedHomeDir()) / "data").string();
+        return path.c_str();
+    }
 
-    const char *GetFullWalDir() { return "/var/infinity/wal"; }
+    const char *GetFullWalDir() {
+        static const std::string path = (fs::path(ResolvedHomeDir()) / "wal").string();
+        return path.c_str();
+    }
 
-    const char *GetFullLogDir() { return "/var/infinity/log"; }
+    const char *GetFullLogDir() {
+        static const std::string path = (fs::path(ResolvedHomeDir()) / "log").string();
+        return path.c_str();
+    }
 
-    const char *GetFullTmpDir() { return "/var/infinity/tmp"; }
+    const char *GetFullTmpDir() {
+        static const std::string path = (fs::path(ResolvedHomeDir()) / "tmp").string();
+        return path.c_str();
+    }
 
-    const char *GetCatalogDir() { return "/var/infinity/catalog"; }
+    const char *GetCatalogDir() {
+        static const std::string path = (fs::path(ResolvedHomeDir()) / "catalog").string();
+        return path.c_str();
+    }
 
-    const char *GetFullPersistDir() { return "/var/infinity/persistence"; }
+    const char *GetFullPersistDir() {
+        static const std::string path = (fs::path(ResolvedHomeDir()) / "persistence").string();
+        return path.c_str();
+    }
 
     const char *GetTmpDir() { return "tmp"; }
 
     const char *GetResourceDir() { return "/usr/share/infinity/resource"; }
 
-    const char *GetSnapshotDir() { return "/var/infinity/snapshot"; }
+    const char *GetSnapshotDir() {
+        static const std::string path = (fs::path(ResolvedHomeDir()) / "snapshot").string();
+        return path.c_str();
+    }
 
     void CleanupDbDirs() {
         const char *infinity_db_dirs[] =
@@ -130,6 +152,19 @@ protected:
     void CheckFilePaths(std::vector<std::string> &delete_file_paths, std::vector<std::string> &exist_file_paths);
 
 private:
+    static const std::string &ResolvedHomeDir() {
+        static const std::string home_dir = [] {
+#ifdef __APPLE__
+            const char *test_home = std::getenv("INFINITY_TEST_HOME");
+            if (test_home != nullptr && test_home[0] != '\0') {
+                return std::string(test_home);
+            }
+#endif
+            return std::string("/var/infinity");
+        }();
+        return home_dir;
+    }
+
     // Validate if given path satisfy all of following:
     // - The path is a directory or symlink to a directory.
     // - Current user has read, write, and execute permission of the path.

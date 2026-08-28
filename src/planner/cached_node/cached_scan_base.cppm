@@ -41,7 +41,7 @@ public:
 protected:
     std::shared_ptr<std::string> schema_name_{};
     std::shared_ptr<std::string> table_name_{};
-    std::vector<ColumnID> column_ids_{};
+    std::vector<size_t> column_ids_{};
     TxnTimeStamp query_ts_{};
 };
 

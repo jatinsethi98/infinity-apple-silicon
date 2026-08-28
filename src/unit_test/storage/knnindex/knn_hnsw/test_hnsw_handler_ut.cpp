@@ -21,6 +21,7 @@ module infinity_core:ut.test_hnsw_handler;
 import :ut.base_test;
 import :hnsw_alg;
 import :hnsw_handler;
+import :hnsw_file_worker;
 import :index_hnsw;
 import :index_base;
 #pragma clang diagnostic push
@@ -178,6 +179,35 @@ TEST_F(HnswHandlerTest, test_memory) {
 
         SearchHnswHandler(hnsw_handler.get());
     }
+}
+
+TEST_F(HnswHandlerTest, test_file_worker_spill_round_trip) {
+    auto index_hnsw = MakeIndexHnsw();
+    auto column_def = MakeColumnDef();
+    auto data_dir = std::make_shared<std::string>(save_dir_ + "/hnsw_file_worker_data");
+    auto temp_dir = std::make_shared<std::string>(save_dir_ + "/hnsw_file_worker_spill");
+    auto file_dir = std::make_shared<std::string>("index");
+    auto file_name = std::make_shared<std::string>("spill.bin");
+
+    HnswFileWorker file_worker(data_dir, temp_dir, file_dir, file_name, index_hnsw, column_def, nullptr);
+    file_worker.AllocateInMemory();
+    auto *handler_slot = static_cast<HnswHandlerPtr *>(file_worker.GetData());
+    auto handler = HnswHandler::Make(index_hnsw.get(), column_def);
+    auto iter = DenseVectorIter<float, LabelT>(data.get(), dim, element_size);
+    handler->InsertVecs(std::move(iter));
+    *handler_slot = handler.release();
+
+    ASSERT_TRUE(file_worker.WriteToFile(true));
+    file_worker.FreeInMemory();
+    file_worker.ReadFromFile(true);
+
+    auto *loaded_slot = static_cast<HnswHandlerPtr *>(file_worker.GetData());
+    ASSERT_NE(loaded_slot, nullptr);
+    ASSERT_NE(*loaded_slot, nullptr);
+    EXPECT_EQ((*loaded_slot)->GetRowCount(), element_size);
+    SearchHnswHandler(*loaded_slot);
+
+    file_worker.CleanupTempFile();
 }
 
 TEST_F(HnswHandlerTest, test_compress) {
