@@ -148,16 +148,26 @@ def parse_kv(text):
 def run_engine(binary, engine, args, sidecar_path):
     """Run one engine binary once in a fresh process. Returns a result dict.
 
-    The binary uses the 17-arg campaign protocol and self-suspends (SIGSTOP) at
-    attestation barriers; campaign.run_campaign builds the argv and supervises
-    the SIGCONT resumes. See campaign.py.
+    Current binaries accept a plain 11-positional-argument invocation and do not
+    suspend themselves, so they run under a bare subprocess. Older prebuilt
+    binaries require the 17-arg campaign protocol and SIGSTOP at attestation
+    barriers; we fall back to campaign.run_campaign (which supervises the SIGCONT
+    resumes) when the plain form is rejected with the usage exit code.
     """
-    argv = campaign.build_argv(
-        binary, engine, args.dataset, args.n, args.d, args.m, args.efc,
+    plain_argv = campaign.build_plain_argv(
+        binary, args.dataset, args.n, args.d, args.m, args.efc,
         args.ef_list[0],               # argv efSearch: only sets echoed config
         args.chunk_size, args.query_count, args.participants, args.build_grain,
         sidecar_path)
-    res = campaign.run_campaign(argv, timeout=args.timeout)
+    res = campaign.run_plain(plain_argv, timeout=args.timeout)
+    argv = plain_argv
+    if res["returncode"] == campaign.USAGE_EXIT_CODE and not res["timed_out"]:
+        # Legacy binary: retry with the campaign binding and a supervisor.
+        argv = campaign.build_argv(
+            binary, engine, args.dataset, args.n, args.d, args.m, args.efc,
+            args.ef_list[0], args.chunk_size, args.query_count,
+            args.participants, args.build_grain, sidecar_path)
+        res = campaign.run_campaign(argv, timeout=args.timeout)
     stdout, stderr = res["stdout"], res["stderr"]
     returncode, wall_ns = res["returncode"], res["wall_ns"]
     if res["timed_out"]:

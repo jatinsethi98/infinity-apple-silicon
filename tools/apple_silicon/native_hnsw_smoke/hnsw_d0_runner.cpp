@@ -68,10 +68,18 @@ void PrintAttestationSnapshot(std::string_view phase, const HnswD0AttestationSna
     }
 }
 
+// Campaign mode is opt-in. Without it the runner never suspends itself, so the
+// binary can be driven directly by a plain 11-positional-argument invocation with no
+// external supervisor. See RunHnswD0 for the two accepted argument counts.
+bool g_campaign_mode = false;
+
 bool StopAtAttestationBarrier(std::string_view phase) {
     std::cout << "attestation_barrier=" << phase << '\n';
     std::cout.flush();
     std::cerr.flush();
+    if (!g_campaign_mode) {
+        return true;
+    }
     if (raise(SIGSTOP) != 0) {
         std::cerr << "attestation barrier failed: " << std::strerror(errno) << '\n';
         return false;
@@ -628,6 +636,9 @@ std::uint32_t SidecarEngine(HnswD0Engine engine) {
     throw std::runtime_error("audit sidecar engine is invalid");
 }
 
+// Role id used when no campaign binding is supplied. Must satisfy RoleMatchesEngine.
+std::uint32_t DefaultRoleForEngine(HnswD0Engine engine) { return engine == HnswD0Engine::kFaiss ? 4u : 1u; }
+
 bool RoleMatchesEngine(std::uint32_t role_id, HnswD0Engine engine) {
     switch (role_id) {
         case 1:
@@ -1002,8 +1013,11 @@ void Prefault(const std::uint8_t *data, std::size_t size) {
 void PrintUsage(const char *binary) {
     std::cerr << "usage: " << binary
               << " DATASET_PATH VECTORS DIMENSIONS M EF_CONSTRUCTION EF_SEARCH CHUNK_SIZE "
-                 "QUERY_COUNT PARTICIPANTS BUILD_GRAIN AUDIT_SIDECAR_PATH CAMPAIGN_NONCE_HEX "
-                 "SCHEDULE_SEQUENCE ROLE_ID EXPECTED_EXECUTABLE_SHA256 EXPECTED_DATASET_SHA256\n";
+                 "QUERY_COUNT PARTICIPANTS BUILD_GRAIN AUDIT_SIDECAR_PATH\n"
+              << "       (optional campaign mode appends: CAMPAIGN_NONCE_HEX SCHEDULE_SEQUENCE "
+                 "ROLE_ID EXPECTED_EXECUTABLE_SHA256 EXPECTED_DATASET_SHA256; it verifies the "
+                 "executable and dataset digests and suspends at each attestation barrier, so it "
+                 "requires an external supervisor to send SIGCONT)\n";
 }
 
 void PrintResult(HnswD0Engine engine,
@@ -1132,10 +1146,11 @@ int RunHnswD0(int argc, char **argv, HnswD0Engine engine, HnswD0Bridge bridge) {
     if (argc == 2 && std::strcmp(argv[1], "--attest-only") == 0) {
         return RunAttestationOnly();
     }
-    if (argc != 17) {
+    if (argc != 12 && argc != 17) {
         PrintUsage(argc > 0 ? argv[0] : "hnsw_d0");
         return kUsageExitCode;
     }
+    g_campaign_mode = (argc == 17);  // argc 12 = plain form, argc 17 = plain + 5 binding args
 
     HnswDevConfig config{};
     AuditBinding binding;
@@ -1144,12 +1159,19 @@ int RunHnswD0(int argc, char **argv, HnswD0Engine engine, HnswD0Bridge bridge) {
     if (!ParseInteger(argv[2], config.vector_count) || !ParseInteger(argv[3], config.dimension) || !ParseInteger(argv[4], config.m) ||
         !ParseInteger(argv[5], config.ef_construction) || !ParseInteger(argv[6], config.ef_search) || !ParseInteger(argv[7], config.chunk_size) ||
         !ParseInteger(argv[8], config.query_count) || !ParseInteger(argv[9], config.participant_count) ||
-        !ParseInteger(argv[10], config.build_grain) || !ParseSha256Hex(argv[12], binding.campaign_nonce) ||
-        !ParseInteger(argv[13], binding.schedule_sequence) || !ParseInteger(argv[14], binding.role_id) ||
-        !ParseSha256Hex(argv[15], expected_executable_sha256) || !ParseSha256Hex(argv[16], expected_dataset_sha256) ||
-        !RoleMatchesEngine(binding.role_id, engine)) {
+        !ParseInteger(argv[10], config.build_grain)) {
         PrintUsage(argv[0]);
         return kUsageExitCode;
+    }
+    if (g_campaign_mode) {
+        if (!ParseSha256Hex(argv[12], binding.campaign_nonce) || !ParseInteger(argv[13], binding.schedule_sequence) ||
+            !ParseInteger(argv[14], binding.role_id) || !ParseSha256Hex(argv[15], expected_executable_sha256) ||
+            !ParseSha256Hex(argv[16], expected_dataset_sha256) || !RoleMatchesEngine(binding.role_id, engine)) {
+            PrintUsage(argv[0]);
+            return kUsageExitCode;
+        }
+    } else {
+        binding.role_id = DefaultRoleForEngine(engine);
     }
 
     std::size_t data_bytes = 0;
@@ -1170,7 +1192,7 @@ int RunHnswD0(int argc, char **argv, HnswD0Engine engine, HnswD0Bridge bridge) {
         std::cerr << "evidence binding failed: " << executable_diagnostic << '\n';
         return kSidecarExitCode;
     }
-    if (binding.executable_sha256 != expected_executable_sha256) {
+    if (g_campaign_mode && binding.executable_sha256 != expected_executable_sha256) {
         std::cerr << "evidence binding failed: executable SHA-256 mismatch: expected " << Sha256Hex(expected_executable_sha256) << ", got "
                   << Sha256Hex(binding.executable_sha256) << '\n';
         return kSidecarExitCode;
@@ -1183,7 +1205,7 @@ int RunHnswD0(int argc, char **argv, HnswD0Engine engine, HnswD0Bridge bridge) {
     const std::uint64_t data_hash = Fnv1a64(dataset.bytes(), data_bytes);
     binding.dataset_sha256 = ComputeSha256(dataset.bytes(), data_bytes);
     const std::string data_sha256 = Sha256Hex(binding.dataset_sha256);
-    if (binding.dataset_sha256 != expected_dataset_sha256) {
+    if (g_campaign_mode && binding.dataset_sha256 != expected_dataset_sha256) {
         std::cerr << "evidence binding failed: dataset SHA-256 mismatch: expected " << Sha256Hex(expected_dataset_sha256) << ", got " << data_sha256
                   << '\n';
         return kSidecarExitCode;
@@ -1201,7 +1223,8 @@ int RunHnswD0(int argc, char **argv, HnswD0Engine engine, HnswD0Bridge bridge) {
     Sha256Digest executable_sha256_after_bridge{};
     const bool executable_hash_valid =
         HashHeldExecutable(attestation.executable_fd(), executable_sha256_after_bridge, executable_diagnostic);
-    const bool executable_hash_unchanged = executable_hash_valid && executable_sha256_after_bridge == binding.executable_sha256;
+    const bool executable_hash_unchanged =
+        !g_campaign_mode || (executable_hash_valid && executable_sha256_after_bridge == binding.executable_sha256);
     HnswD0AttestationSnapshot attestation_after;
     HnswD0AttestationSummary attestation_summary;
     std::string attestation_diagnostic;

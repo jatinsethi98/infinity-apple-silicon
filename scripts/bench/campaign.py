@@ -115,3 +115,29 @@ def run_campaign(argv, timeout, nudge_interval=0.05):
         "wall_ns": wall_ns,
         "timed_out": timed_out,
     }
+
+USAGE_EXIT_CODE = 64  # kUsageExitCode in hnsw_d0_runner.cpp
+
+
+def build_plain_argv(binary, dataset, n, d, m, efc, ef_search, chunk,
+                     query_count, participants, build_grain, sidecar):
+    """Assemble the plain 11-positional-argument argv (no campaign binding)."""
+    return [
+        binary, dataset,
+        str(n), str(d), str(m), str(efc), str(ef_search), str(chunk),
+        str(query_count), str(participants), str(build_grain), sidecar,
+    ]
+
+
+def run_plain(argv, timeout):
+    """Run argv as an ordinary subprocess. No barriers, no supervisor."""
+    start = time.monotonic_ns()
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return {"stdout": proc.stdout, "stderr": proc.stderr,
+                "returncode": proc.returncode,
+                "wall_ns": time.monotonic_ns() - start, "timed_out": False}
+    except subprocess.TimeoutExpired as exc:
+        return {"stdout": exc.stdout or "", "stderr": exc.stderr or "",
+                "returncode": None, "wall_ns": time.monotonic_ns() - start,
+                "timed_out": True}
