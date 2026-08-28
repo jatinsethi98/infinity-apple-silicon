@@ -39,79 +39,19 @@ set(
 if(NOT EXISTS "${INFINITY_NATIVE_CTPL_INCLUDE_DIR}/ctpl_stl.h")
     message(FATAL_ERROR "Set INFINITY_NATIVE_CTPL_INCLUDE_DIR to a directory containing ctpl_stl.h")
 endif()
-option(
-    INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL
-    "Enable the experimental exact incremental reciprocal-list treatment"
-    OFF
-)
-option(
-    INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW
-    "Compute incremental reciprocal updates in shadow mode"
-    OFF
-)
-option(
-    INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS
-    "Add reciprocal-update counters and the treatment runtime control"
-    OFF
-)
-option(
-    INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE
-    "Compile the armable incremental reciprocal execution witness"
-    OFF
-)
+# The Batch4 reciprocal-neighbor pruning treatment failed the paired recall
+# gate on Apple arm64, so the scalar reciprocal tail is the retained path. The
+# option/def is kept only until the guarded Batch4 body is removed from
+# hnsw_alg.cppm (see commit that reduces the engine sources); it must stay ON
+# so the retained code path is exercised until then.
 option(
     INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING
     "Disable Batch4 reciprocal-neighbor pruning for scalar-matched causal controls"
     ON
 )
-option(
-    INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL
-    "Enable exact threshold-based lane dropping in Batch4 construction traversal"
-    OFF
-)
-option(
-    INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE
-    "Compile the armable thresholded Batch4 execution witness"
-    OFF
-)
-if(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL AND INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    message(FATAL_ERROR "The incremental reciprocal treatment and shadow verifier are mutually exclusive")
-endif()
-if((INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL OR INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW) AND
-   NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-    message(FATAL_ERROR "The incremental reciprocal experiment requires an arm64-only build")
-endif()
-if(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS AND
-   NOT INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL)
-    message(FATAL_ERROR "Incremental reciprocal diagnostics require the treatment option")
-endif()
-if(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE AND
-   NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-    message(FATAL_ERROR "Incremental reciprocal execution evidence requires an arm64-only build")
-endif()
-if(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE AND
-   INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    message(FATAL_ERROR "Incremental reciprocal execution evidence is incompatible with shadow mode")
-endif()
 if(INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING AND
    NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
     message(FATAL_ERROR "The scalar reciprocal-pruning control requires an arm64-only build")
-endif()
-if(INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL AND
-   NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-    message(FATAL_ERROR "Thresholded Batch4 traversal requires an arm64-only build")
-endif()
-if(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE AND
-   NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-    message(FATAL_ERROR "Thresholded Batch4 execution evidence requires an arm64-only build")
-endif()
-if(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE AND
-   INFINITY_DISABLE_APPLE_HNSW_BATCH4_TRAVERSAL)
-    message(FATAL_ERROR "Thresholded Batch4 execution evidence requires Batch4 traversal")
-endif()
-if((INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL OR INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW) AND
-   NOT INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING)
-    message(FATAL_ERROR "The incremental reciprocal experiment requires scalar reciprocal pruning")
 endif()
 set(
     INFINITY_NATIVE_HNSW_ALG_SOURCE
@@ -199,45 +139,10 @@ target_include_directories(
         "/opt/homebrew/opt/simde/include"
 )
 target_compile_definitions(infinity_native_hnsw PRIVATE SIMDE_ENABLE_NATIVE_ALIASES)
-if(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-    target_compile_definitions(
-        infinity_native_hnsw
-        PUBLIC INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE
-    )
-endif()
 if(INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING)
     target_compile_definitions(
         infinity_native_hnsw
         PUBLIC INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING
-    )
-endif()
-if(INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL)
-    target_compile_definitions(
-        infinity_native_hnsw
-        PUBLIC INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL
-    )
-endif()
-if(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-    target_compile_definitions(
-        infinity_native_hnsw
-        PUBLIC INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE
-    )
-endif()
-if(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL)
-    target_compile_definitions(
-        infinity_native_hnsw
-        PUBLIC INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL
-    )
-    if(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-        target_compile_definitions(
-            infinity_native_hnsw
-            PUBLIC INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS
-        )
-    endif()
-elseif(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    target_compile_definitions(
-        infinity_native_hnsw
-        PUBLIC INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW
     )
 endif()
 target_compile_options(
@@ -295,39 +200,15 @@ target_compile_options(
         -Wno-reserved-module-identifier
 )
 
-add_executable(infinity_native_hnsw_bulk_build_edge_smoke native_hnsw_bulk_build_edge_smoke.cpp)
-target_link_libraries(infinity_native_hnsw_bulk_build_edge_smoke PRIVATE infinity_native_hnsw)
+# Hand-written NEON L2 kernel with a scalar reference correctness check; seed of
+# the planned NEON optimization work. Wired so it is built and cannot rot.
+add_executable(neon_l2_micro neon_l2_micro.cpp)
 target_compile_options(
-    infinity_native_hnsw_bulk_build_edge_smoke
+    neon_l2_micro
     PRIVATE
         -O3
         -Wall
         -Wextra
-        -Wno-reserved-module-identifier
-)
-
-add_executable(infinity_hnsw_incremental_reciprocal_test incremental_reciprocal_test.cpp)
-target_link_libraries(infinity_hnsw_incremental_reciprocal_test PRIVATE infinity_native_hnsw)
-target_compile_options(
-    infinity_hnsw_incremental_reciprocal_test
-    PRIVATE
-        -O3
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wno-reserved-module-identifier
-)
-
-add_executable(infinity_hnsw_thresholded_batch4_l2_test thresholded_batch4_l2_test.cpp)
-target_link_libraries(infinity_hnsw_thresholded_batch4_l2_test PRIVATE infinity_native_hnsw)
-target_compile_options(
-    infinity_hnsw_thresholded_batch4_l2_test
-    PRIVATE
-        -O3
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wno-reserved-module-identifier
 )
 
 add_executable(
@@ -355,12 +236,6 @@ add_test(NAME infinity_native_hnsw_smoke COMMAND infinity_native_hnsw_smoke)
 add_test(NAME infinity_native_simd_l2_smoke COMMAND infinity_native_simd_l2_smoke)
 add_test(NAME infinity_native_hnsw_bulk_build_smoke COMMAND infinity_native_hnsw_bulk_build_smoke)
 add_test(NAME infinity_native_hnsw_handler_smoke COMMAND infinity_native_hnsw_handler_smoke)
-add_test(NAME infinity_native_hnsw_bulk_build_edge_smoke COMMAND infinity_native_hnsw_bulk_build_edge_smoke)
-set_tests_properties(infinity_native_hnsw_bulk_build_edge_smoke PROPERTIES TIMEOUT 60)
-add_test(NAME infinity_hnsw_incremental_reciprocal_test COMMAND infinity_hnsw_incremental_reciprocal_test)
-set_tests_properties(infinity_hnsw_incremental_reciprocal_test PROPERTIES TIMEOUT 600)
-add_test(NAME infinity_hnsw_thresholded_batch4_l2_test COMMAND infinity_hnsw_thresholded_batch4_l2_test)
-set_tests_properties(infinity_hnsw_thresholded_batch4_l2_test PROPERTIES TIMEOUT 600)
 
 add_executable(
     hnsw_d0_query_benchmark_test
