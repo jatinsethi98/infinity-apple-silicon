@@ -35,12 +35,6 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
         auto index = Hnsw::Make(chunk_size, max_chunk_count, dimension, static_cast<size_t>(config->m), static_cast<size_t>(config->ef_construction));
         HNSW_D0_TIMING_PROBE(kIndexReady);
         HNSW_D0_TIMING_PROBE(kExecutionWitnessArmBegin);
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-        const bool incremental_witness_armed = index->ArmIncrementalReciprocalExecutionEvidence();
-#endif
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-        const bool threshold_witness_armed = index->ArmThresholdBatch4ExecutionEvidence();
-#endif
         HNSW_D0_TIMING_PROBE(kExecutionWitnessArmEnd);
         infinity::DenseVectorIter<float, Label> iterator(data, dimension, vector_count);
         const auto insert_begin = HNSW_D0_READ_STEADY_CLOCK(kBuildEntered);
@@ -54,39 +48,8 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
         HNSW_D0_TIMING_PROBE(kBuildReturned);
         const auto insert_end = HNSW_D0_READ_STEADY_CLOCK(kTimerStopped);
         HNSW_D0_TIMING_PROBE(kExecutionWitnessSealBegin);
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-        const infinity::HnswIncrementalReciprocalExecutionEvidence incremental_witness =
-            index->SealAndGetIncrementalReciprocalExecutionEvidence();
-        result->execution_witness.incremental_treatment_compiled = incremental_witness.treatment_compiled;
-        result->execution_witness.incremental_capture_armed = incremental_witness.capture_armed;
-        result->execution_witness.incremental_eligible_branch_entered = incremental_witness.eligible_branch_entered;
-        result->execution_witness.incremental_successful_unchanged_observed = incremental_witness.successful_unchanged_observed;
-        result->execution_witness.incremental_successful_updated_observed = incremental_witness.successful_updated_observed;
-        const bool incremental_witness_valid =
-            incremental_witness.treatment_compiled
-                ? incremental_witness_armed && incremental_witness.capture_armed && incremental_witness.eligible_branch_entered &&
-                      incremental_witness.successful_unchanged_observed && incremental_witness.successful_updated_observed
-                : !incremental_witness_armed && !incremental_witness.capture_armed && !incremental_witness.eligible_branch_entered &&
-                      !incremental_witness.successful_unchanged_observed && !incremental_witness.successful_updated_observed;
-#else
         constexpr bool incremental_witness_valid = true;
-#endif
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-        const infinity::HnswThresholdBatch4ExecutionEvidence threshold_witness = index->SealAndGetThresholdBatch4ExecutionEvidence();
-        result->execution_witness.threshold_treatment_compiled = threshold_witness.treatment_compiled;
-        result->execution_witness.threshold_capture_armed = threshold_witness.capture_armed;
-        result->execution_witness.threshold_eligible_branch_entered = threshold_witness.eligible_branch_entered;
-        result->execution_witness.threshold_rejected_lane_observed = threshold_witness.rejected_lane_observed;
-        result->execution_witness.threshold_surviving_lane_observed = threshold_witness.surviving_lane_observed;
-        const bool threshold_witness_valid =
-            threshold_witness.treatment_compiled
-                ? threshold_witness_armed && threshold_witness.capture_armed && threshold_witness.eligible_branch_entered &&
-                      threshold_witness.rejected_lane_observed && threshold_witness.surviving_lane_observed
-                : !threshold_witness_armed && !threshold_witness.capture_armed && !threshold_witness.eligible_branch_entered &&
-                      !threshold_witness.rejected_lane_observed && !threshold_witness.surviving_lane_observed;
-#else
         constexpr bool threshold_witness_valid = true;
-#endif
         HNSW_D0_TIMING_PROBE(kExecutionWitnessSealEnd);
         if (config->index_barrier != nullptr &&
             config->index_barrier(HnswD0IndexBarrierPhase::kAfterIndex, config->index_barrier_context) != 0) {
