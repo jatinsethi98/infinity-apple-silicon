@@ -18,6 +18,9 @@ import :infinity_exception;
 import :sparse_util;
 import :default_values;
 
+import std;
+import std.compat;
+
 namespace infinity {
 
 export struct HnswConfig {
@@ -32,6 +35,10 @@ export using VertexListSize = i32;
 export using LayerSize = i32;
 
 export constexpr VertexType kInvalidVertex = -1;
+export constexpr LayerSize kHnswMaxSupportedLayer = 64;
+
+
+
 
 export template <typename Iterator, typename RtnType, typename LabelType>
 concept DataIteratorConcept = requires(Iterator iter) {
@@ -46,7 +53,7 @@ export template <typename DataType, typename LabelType>
 class DenseVectorIter {
     const DataType *ptr_;
     const size_t dim_;
-    const DataType *const ptr_end_;
+    size_t remaining_;
     LabelType label_;
 
 public:
@@ -54,31 +61,32 @@ public:
     using Split = std::vector<This>;
     using ValueType = const DataType *;
 
-    DenseVectorIter(ValueType ptr, size_t dim, size_t vec_num, LabelType offset = 0)
-        : ptr_(ptr), dim_(dim), ptr_end_(ptr_ + dim * vec_num), label_(offset) {}
+    DenseVectorIter(ValueType ptr, size_t dim, size_t vec_num, LabelType offset = 0) : ptr_(ptr), dim_(dim), remaining_(vec_num), label_(offset) {}
 
     std::optional<std::pair<ValueType, LabelType>> Next() {
-        auto ret = ptr_;
-        if (ret == ptr_end_) {
+        if (remaining_ == 0) {
             return std::nullopt;
         }
+        auto ret = ptr_;
         ptr_ += dim_;
+        --remaining_;
         return std::make_pair(ret, label_++);
     }
 
-    size_t GetRowCount() const { return (ptr_end_ - ptr_) / dim_; }
+    size_t GetRowCount() const { return remaining_; }
 
     Split split() && {
         Split res;
-        LabelType vec_num = 0;
+        size_t vec_num = 0;
         ValueType head = ptr_;
-        while (ptr_ != ptr_end_) {
+        while (remaining_ != 0) {
             if (vec_num == DEFAULT_ITER_BATCH_SIZE) {
                 res.emplace_back(head, dim_, DEFAULT_ITER_BATCH_SIZE, label_ + res.size() * DEFAULT_ITER_BATCH_SIZE);
                 vec_num = 0;
                 head = ptr_;
             }
             ptr_ += dim_;
+            --remaining_;
             ++vec_num;
         }
         res.emplace_back(head, dim_, vec_num, label_ + res.size() * DEFAULT_ITER_BATCH_SIZE);

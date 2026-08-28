@@ -21,6 +21,7 @@ module infinity_core:ut.test_lvq;
 import :ut.base_test;
 import :dist_func_l2;
 import :data_store;
+import :data_store_util;
 import :vec_store_type;
 import :infinity_exception;
 import :hnsw_common;
@@ -202,4 +203,80 @@ TEST_F(HnswLVQTest, test1) {
             CheckStore(lvq_store, data.get());
         }
     }
+}
+
+TEST_F(HnswLVQTest, compact_unaligned_records_round_trip) {
+    constexpr size_t dim = 17;
+    constexpr size_t vec_n = 7;
+    using OwnedMeta = VecStoreType::Meta<true>;
+    using OwnedInner = VecStoreType::Inner<true>;
+    using MappedMeta = VecStoreType::Meta<false>;
+    using MappedInner = VecStoreType::Inner<false>;
+
+    std::vector<float> data(dim * vec_n);
+    for (size_t row = 0; row < vec_n; ++row) {
+        for (size_t column = 0; column < dim; ++column) {
+            data[row * dim + column] = static_cast<float>(row * 3 + column) + static_cast<float>((row + column) % 5) * 0.125f;
+        }
+    }
+
+    OwnedMeta meta = OwnedMeta::Make(dim);
+    size_t mem_usage = 0;
+    meta.Optimize<LabelT>(DenseVectorIter<float, LabelT>(data.data(), dim, vec_n), {}, mem_usage);
+    OwnedInner inner = OwnedInner::Make(vec_n, meta, mem_usage);
+    for (size_t row = 0; row < vec_n; ++row) {
+        inner.SetVec(row, data.data() + row * dim, meta, mem_usage);
+    }
+
+    ASSERT_NE(meta.compress_data_size() % alignof(float), 0u);
+    ASSERT_EQ(mem_usage, vec_n * meta.compress_data_size());
+
+    auto verify = [&](const auto &loaded_meta, const auto &loaded_inner) {
+        ASSERT_EQ(loaded_meta.dim(), dim);
+        for (size_t row = 0; row < vec_n; ++row) {
+            const auto encoded = loaded_inner.GetVec(row, loaded_meta);
+            ASSERT_TRUE(std::isfinite(encoded->scale_));
+            ASSERT_TRUE(std::isfinite(encoded->bias_));
+            for (size_t column = 0; column < dim; ++column) {
+                const float decoded =
+                    encoded->scale_ * encoded->compress_vec_[column] + encoded->bias_ + static_cast<float>(loaded_meta.mean()[column]);
+                const float tolerance = std::max(encoded->scale_ * 0.51f, 1e-5f);
+                EXPECT_NEAR(decoded, data[row * dim + column], tolerance);
+            }
+        }
+    };
+    verify(meta, inner);
+
+    const std::string filepath = file_dir_ + "/lvq_compact_unaligned.bin";
+    {
+        auto [file_handle, status] = VirtualStore::Open(filepath, FileAccessMode::kWrite);
+        ASSERT_TRUE(status.ok()) << status.message();
+        meta.Save(*file_handle);
+        inner.Save(*file_handle, vec_n, meta);
+    }
+
+    const size_t expected_size = sizeof(size_t) + dim * sizeof(MeanType) + vec_n * meta.compress_data_size();
+    ASSERT_EQ(VirtualStore::GetFileSize(filepath), expected_size);
+
+    {
+        auto [file_handle, status] = VirtualStore::Open(filepath, FileAccessMode::kRead);
+        ASSERT_TRUE(status.ok()) << status.message();
+        OwnedMeta loaded_meta = OwnedMeta::Load(*file_handle);
+        size_t loaded_mem_usage = 0;
+        OwnedInner loaded_inner = OwnedInner::Load(*file_handle, vec_n, vec_n, loaded_meta, loaded_mem_usage);
+        ASSERT_EQ(loaded_mem_usage, mem_usage);
+        verify(loaded_meta, loaded_inner);
+    }
+
+    u8 *mapped_bytes = nullptr;
+    size_t mapped_size = VirtualStore::GetFileSize(filepath);
+    ASSERT_EQ(VirtualStore::MmapFile(filepath, mapped_bytes, mapped_size), 0);
+    {
+        HnswPointerReader reader(reinterpret_cast<const char *>(mapped_bytes), mapped_size);
+        MappedMeta mapped_meta = MappedMeta::LoadFromPtr(reader);
+        MappedInner mapped_inner = MappedInner::LoadFromPtr(reader, vec_n, mapped_meta);
+        reader.RequireEmpty();
+        verify(mapped_meta, mapped_inner);
+    }
+    ASSERT_EQ(VirtualStore::MunmapFile(filepath), 0);
 }

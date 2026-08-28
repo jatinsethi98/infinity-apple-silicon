@@ -37,7 +37,8 @@ public:
     std::tuple<size_t, Status> Read(void *buffer, u64 nbytes);
     std::tuple<size_t, Status> Read(std::string &buffer, u64 nbytes);
     Status Seek(u64 nbytes);
-    i64 FileSize();
+    i64 FileSize() const;
+    i64 RemainingBytes() const;
     std::tuple<char *, size_t, Status> MmapRead(const std::string &name);
     Status Unmmap(const std::string &name);
     Status Sync();

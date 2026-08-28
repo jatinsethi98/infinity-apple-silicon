@@ -45,6 +45,9 @@ using namespace infinity;
 class ConflictCheckTest : public BaseTest {
 
 protected:
+    using TxnPtr = decltype(std::declval<NewTxnManager *>()->BeginTxn(std::declval<std::unique_ptr<std::string>>(),
+                                                                     std::declval<TransactionType>()));
+
     void SetUp() override {
         // Earlier cases may leave a dirty infinity instance. Destroy it first.
         infinity::InfinityContext::instance().UnInit();
@@ -62,7 +65,7 @@ protected:
         CleanupDbDirs();
     }
 
-    NewTxn *DeleteRow(const std::string &db_name, const std::string &table_name, std::vector<SegmentOffset> segment_offsets) {
+    TxnPtr DeleteRow(const std::string &db_name, const std::string &table_name, std::vector<SegmentOffset> segment_offsets) {
         auto *txn = txn_mgr_->BeginTxn(std::make_unique<std::string>("Delete row"), TransactionType::kDelete);
 
         std::vector<RowID> row_ids;
@@ -75,7 +78,7 @@ protected:
         return txn;
     };
 
-    void ExpectConflict(NewTxn *txn) {
+    void ExpectConflict(TxnPtr txn) {
         Status status = txn_mgr_->CommitTxn(txn);
         EXPECT_EQ(status.code(), ErrorCode::kTxnConflict);
     };

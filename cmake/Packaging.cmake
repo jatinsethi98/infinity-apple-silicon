@@ -43,10 +43,12 @@ install(FILES conf/infinity_conf.toml DESTINATION etc)
 # ---------------------------------------------------------------------------
 set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/conf/postinst")
 
-find_program(LLVM_STRIP_EXECUTABLE
-    NAMES llvm-strip-20 llvm-strip
-    REQUIRED)
-set(CPACK_RPM_SPEC_MORE_DEFINE "%global __strip ${LLVM_STRIP_EXECUTABLE}")
+if (NOT APPLE)
+    find_program(LLVM_STRIP_EXECUTABLE
+        NAMES llvm-strip-20 llvm-strip
+        REQUIRED)
+    set(CPACK_RPM_SPEC_MORE_DEFINE "%global __strip ${LLVM_STRIP_EXECUTABLE}")
+endif ()
 
 # ---------------------------------------------------------------------------
 # DEB generator
@@ -59,7 +61,11 @@ set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_CURRENT_SOURCE_DIR}/conf/postins
 # ---------------------------------------------------------------------------
 # Generators & misc
 # ---------------------------------------------------------------------------
-set(CPACK_GENERATOR "RPM;DEB;TGZ")
+if (APPLE)
+    set(CPACK_GENERATOR "TGZ")
+else ()
+    set(CPACK_GENERATOR "RPM;DEB;TGZ")
+endif ()
 
 # Enable CPack debug output
 set(CPACK_PACKAGE_DEBUG True)

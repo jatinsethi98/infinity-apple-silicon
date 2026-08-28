@@ -142,12 +142,18 @@ class RemoteThriftInfinityConnection(InfinityConnection, ABC):
     def flush_data(self):
         flush_request = ttypes.FlushRequest()
         flush_request.flush_type = "data"
-        self._client.flush(flush_request)
+        res = self._client.flush(flush_request)
+        if res.error_code == ErrorCode.OK:
+            return res
+        raise InfinityException(res.error_code, res.error_msg)
 
     def flush_catalog(self):
         flush_request = ttypes.FlushRequest()
         flush_request.flush_type = "catalog"
-        self._client.flush(flush_request)
+        res = self._client.flush(flush_request)
+        if res.error_code == ErrorCode.OK:
+            return res
+        raise InfinityException(res.error_code, res.error_msg)
 
     def disconnect(self):
         res = self._client.disconnect()

@@ -73,7 +73,7 @@ protected:
     void InitData();
 
 public:
-    const std::string data_path_ = "/var/infinity";
+    const std::string data_path_ = GetHomeDir();
     const std::string db_name_ = "default_db";
     const std::string table_name_ = "test_table";
     const std::string index_name_ = "test_fulltext_index";

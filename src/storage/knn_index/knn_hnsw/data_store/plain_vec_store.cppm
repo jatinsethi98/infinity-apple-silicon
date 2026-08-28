@@ -63,13 +63,20 @@ public:
     void Save(LocalFileHandle &file_handle) const { file_handle.Append(&dim_, sizeof(dim_)); }
 
     static This Load(LocalFileHandle &file_handle) {
-        size_t dim;
-        file_handle.Read(&dim, sizeof(dim));
+        const size_t dim = HnswReadStream<size_t>(file_handle, "plain vector dimension");
+        if (dim == 0) {
+            HnswStreamError("plain vector dimension must be nonzero");
+        }
+        static_cast<void>(HnswStreamCheckedMultiply(dim, sizeof(DataType), "plain vector dimension"));
         return This(dim);
     }
 
-    static This LoadFromPtr(const char *&ptr) {
-        size_t dim = ReadBufAdv<size_t>(ptr);
+    static This LoadFromPtr(HnswPointerReader &reader) {
+        const size_t dim = reader.Read<size_t>("plain vector dimension");
+        if (dim == 0) {
+            HnswPointerImageError("plain vector dimension must be nonzero");
+        }
+        static_cast<void>(HnswCheckedMultiply(dim, sizeof(DataType), "plain vector dimension"));
         return This(dim);
     }
 
@@ -153,18 +160,32 @@ public:
     }
 
     static This Load(LocalFileHandle &file_handle, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
-        assert(cur_vec_num <= max_vec_num);
+        if (cur_vec_num > max_vec_num) {
+            HnswStreamError("plain vector count exceeds capacity");
+        }
+        const size_t max_element_count = HnswStreamCheckedMultiply(max_vec_num, meta.dim(), "plain vector capacity");
+        const size_t stored_element_count = HnswStreamCheckedMultiply(cur_vec_num, meta.dim(), "plain vector data");
+        const size_t max_size = HnswStreamCheckedMultiply(max_element_count, sizeof(DataType), "plain vector capacity");
+        const size_t stored_size = HnswStreamCheckedMultiply(stored_element_count, sizeof(DataType), "plain vector data");
+        HnswEnsureStreamAvailable(file_handle, stored_size, "plain vector data");
         This ret(max_vec_num, meta);
-        file_handle.Read(ret.ptr_.get(), sizeof(DataType) * cur_vec_num * meta.dim());
-        mem_usage += sizeof(DataType) * max_vec_num * meta.dim();
+        HnswReadExact(file_handle, ret.ptr_.get(), stored_size, "plain vector data");
+        mem_usage = HnswStreamCheckedAdd(mem_usage, max_size, "plain vector memory usage");
         return ret;
     }
 
-    static This LoadFromPtr(const char *&ptr, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
+    static This LoadFromPtr(HnswPointerReader &reader, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
+        if (cur_vec_num > max_vec_num) {
+            HnswPointerImageError("plain vector count exceeds capacity");
+        }
+        const size_t max_element_count = HnswCheckedMultiply(max_vec_num, meta.dim(), "plain vector capacity");
+        const size_t stored_element_count = HnswCheckedMultiply(cur_vec_num, meta.dim(), "plain vector data");
+        const size_t max_size = HnswCheckedMultiply(max_element_count, sizeof(DataType), "plain vector capacity");
+        const size_t stored_size = HnswCheckedMultiply(stored_element_count, sizeof(DataType), "plain vector data");
+        reader.EnsureAvailable(stored_size, "plain vector data");
         This ret(max_vec_num, meta);
-        std::memcpy(ret.ptr_.get(), ptr, sizeof(DataType) * cur_vec_num * meta.dim());
-        ptr += sizeof(DataType) * cur_vec_num * meta.dim();
-        mem_usage += sizeof(DataType) * max_vec_num * meta.dim();
+        reader.CopyTo(ret.ptr_.get(), stored_size, "plain vector data");
+        mem_usage = HnswCheckedAdd(mem_usage, max_size, "plain vector memory usage");
         return ret;
     }
 
@@ -185,10 +206,9 @@ protected:
 public:
     explicit PlainVecStoreInner(const DataType *ptr) { this->ptr_ = ptr; }
     PlainVecStoreInner() = default;
-    static This LoadFromPtr(const char *&ptr, size_t cur_vec_num, const Meta &meta) {
-        const auto *p = reinterpret_cast<const DataType *>(ptr); // fixme
-        ptr += sizeof(DataType) * cur_vec_num * meta.dim();
-        return This(p);
+    static This LoadFromPtr(HnswPointerReader &reader, size_t cur_vec_num, const Meta &meta) {
+        const size_t element_count = HnswCheckedMultiply(cur_vec_num, meta.dim(), "plain vector data");
+        return This(reader.ReadArray<DataType>(element_count, "plain vector data"));
     }
 };
 

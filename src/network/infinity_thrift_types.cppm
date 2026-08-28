@@ -33,6 +33,22 @@ import std.compat;
 #define _GLIBCXX_SSTREAM 1
 #define _GLIBCXX_CHRONO 1
 
+#if defined(__APPLE__)
+// libc++ headers are already owned by the imported std module.
+#define _LIBCPP_STRING
+#define _LIBCPP_MAP
+#define _LIBCPP_LIST
+#define _LIBCPP_SET
+#define _LIBCPP_VECTOR
+#define _LIBCPP_FUNCTIONAL
+#define _LIBCPP_CMATH
+#define _LIBCPP_UTILITY
+#define _LIBCPP_MEMORY
+#define _LIBCPP_ALGORITHM
+#define _LIBCPP_SSTREAM
+#define _LIBCPP_CHRONO
+#endif
+
 #include "infinity_thrift/InfinityService.h"
 
 export module infinity_core:infinity_thrift_types;

@@ -28,6 +28,12 @@ export struct SIMD_FUNCTIONS {
     // HNSW F32
     F32DistanceFuncType HNSW_F32L2_ptr_ = Get_HNSW_F32L2_ptr();
     F32DistanceFuncType HNSW_F32L2_16_ptr_ = Get_HNSW_F32L2_16_ptr();
+#if defined(__APPLE__) && defined(__aarch64__)
+    F32DistanceBatch4FuncType HNSW_F32L2_BATCH4_ptr_ = Get_HNSW_F32L2_BATCH4_ptr();
+    F32DistanceBatch4FuncType HNSW_F32L2_BATCH4_16_ptr_ = Get_HNSW_F32L2_BATCH4_16_ptr();
+    F32DistanceBatch4ThresholdFuncType HNSW_F32L2_BATCH4_THRESHOLD_ptr_ = Get_HNSW_F32L2_BATCH4_THRESHOLD_ptr();
+    F32DistanceBatch4ThresholdFuncType HNSW_F32L2_BATCH4_THRESHOLD_16_ptr_ = Get_HNSW_F32L2_BATCH4_THRESHOLD_16_ptr();
+#endif
     F32DistanceFuncType HNSW_F32IP_ptr_ = Get_HNSW_F32IP_ptr();
     F32DistanceFuncType HNSW_F32IP_16_ptr_ = Get_HNSW_F32IP_16_ptr();
     F32DistanceFuncType HNSW_F32Cos_ptr_ = Get_HNSW_F32Cos_ptr();

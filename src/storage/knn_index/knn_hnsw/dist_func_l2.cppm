@@ -46,15 +46,41 @@ public:
 
 private:
     using SIMDFuncType = std::conditional_t<std::is_same_v<DataType, float>, f32, i32> (*)(const DataType *, const DataType *, size_t);
+#if defined(__APPLE__) && defined(__aarch64__)
+    using Batch4SIMDFuncType = void (*)(const f32 *, const f32 *, const f32 *, const f32 *, const f32 *, size_t, f32 *);
+    using Batch4ThresholdSIMDFuncType = std::uint8_t (*)(const f32 *, const f32 *, const f32 *, const f32 *, const f32 *, size_t, f32, f32 *);
+#endif
 
     SIMDFuncType SIMDFunc = nullptr;
+#if defined(__APPLE__) && defined(__aarch64__)
+    Batch4SIMDFuncType Batch4SIMDFunc = nullptr;
+    Batch4ThresholdSIMDFuncType Batch4ThresholdSIMDFunc = nullptr;
+#endif
 
 public:
-    PlainL2Dist() : SIMDFunc(nullptr) {}
-    PlainL2Dist(PlainL2Dist &&other) : SIMDFunc(std::exchange(other.SIMDFunc, nullptr)) {}
-    PlainL2Dist &operator=(PlainL2Dist &&other) {
+    PlainL2Dist()
+        : SIMDFunc(nullptr)
+#if defined(__APPLE__) && defined(__aarch64__)
+          ,
+          Batch4SIMDFunc(nullptr), Batch4ThresholdSIMDFunc(nullptr)
+#endif
+    {
+    }
+    PlainL2Dist(PlainL2Dist &&other) noexcept
+        : SIMDFunc(std::exchange(other.SIMDFunc, nullptr))
+#if defined(__APPLE__) && defined(__aarch64__)
+          ,
+          Batch4SIMDFunc(std::exchange(other.Batch4SIMDFunc, nullptr)), Batch4ThresholdSIMDFunc(std::exchange(other.Batch4ThresholdSIMDFunc, nullptr))
+#endif
+    {
+    }
+    PlainL2Dist &operator=(PlainL2Dist &&other) noexcept {
         if (this != &other) {
             SIMDFunc = std::exchange(other.SIMDFunc, nullptr);
+#if defined(__APPLE__) && defined(__aarch64__)
+            Batch4SIMDFunc = std::exchange(other.Batch4SIMDFunc, nullptr);
+            Batch4ThresholdSIMDFunc = std::exchange(other.Batch4ThresholdSIMDFunc, nullptr);
+#endif
         }
         return *this;
     }
@@ -64,8 +90,16 @@ public:
         if constexpr (std::is_same<DataType, float>()) {
             if (dim % 16 == 0) {
                 SIMDFunc = GetSIMD_FUNCTIONS().HNSW_F32L2_16_ptr_;
+#if defined(__APPLE__) && defined(__aarch64__)
+                Batch4SIMDFunc = GetSIMD_FUNCTIONS().HNSW_F32L2_BATCH4_16_ptr_;
+                Batch4ThresholdSIMDFunc = GetSIMD_FUNCTIONS().HNSW_F32L2_BATCH4_THRESHOLD_16_ptr_;
+#endif
             } else {
                 SIMDFunc = GetSIMD_FUNCTIONS().HNSW_F32L2_ptr_;
+#if defined(__APPLE__) && defined(__aarch64__)
+                Batch4SIMDFunc = GetSIMD_FUNCTIONS().HNSW_F32L2_BATCH4_ptr_;
+                Batch4ThresholdSIMDFunc = GetSIMD_FUNCTIONS().HNSW_F32L2_BATCH4_THRESHOLD_ptr_;
+#endif
             }
         } else if constexpr (std::is_same<DataType, i8>()) {
             if (dim % 64 == 0) {
@@ -94,6 +128,65 @@ public:
     DistanceType operator()(const QueryType &v1, VertexType v2_i, const DataStore &data_store, VertexType v1_i = kInvalidVertex) const {
         return Inner(v1, data_store.GetVec(v2_i), data_store.dim());
     }
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    bool SupportsBatch4() const noexcept { return Batch4SIMDFunc != nullptr; }
+    bool SupportsBatch4WithinThreshold() const noexcept { return Batch4ThresholdSIMDFunc != nullptr; }
+
+    template <typename DataStore>
+        requires std::is_same_v<DataType, f32>
+    void Batch4(const QueryType &query,
+                const std::array<VertexType, 4> &vertices,
+                const DataStore &data_store,
+                std::array<DistanceType, 4> &distances) const noexcept {
+        const std::array<StoreType, 4> candidates{
+            data_store.GetVec(vertices[0]),
+            data_store.GetVec(vertices[1]),
+            data_store.GetVec(vertices[2]),
+            data_store.GetVec(vertices[3]),
+        };
+        const size_t dim = data_store.dim();
+        if (Batch4SIMDFunc != nullptr) {
+            Batch4SIMDFunc(query, candidates[0], candidates[1], candidates[2], candidates[3], dim, distances.data());
+            return;
+        }
+        for (size_t lane = 0; lane < candidates.size(); ++lane) {
+            DistanceType distance = 0;
+            for (size_t index = 0; index < dim; ++index) {
+                const DistanceType delta = query[index] - candidates[lane][index];
+                distance += delta * delta;
+            }
+            distances[lane] = distance;
+        }
+    }
+
+    template <typename DataStore>
+        requires std::is_same_v<DataType, f32>
+    std::uint8_t Batch4WithinThreshold(const QueryType &query,
+                                       const std::array<VertexType, 4> &vertices,
+                                       const DataStore &data_store,
+                                       DistanceType threshold,
+                                       std::array<DistanceType, 4> &distances) const noexcept {
+        const std::array<StoreType, 4> candidates{
+            data_store.GetVec(vertices[0]),
+            data_store.GetVec(vertices[1]),
+            data_store.GetVec(vertices[2]),
+            data_store.GetVec(vertices[3]),
+        };
+        if (Batch4ThresholdSIMDFunc != nullptr) {
+            return Batch4ThresholdSIMDFunc(query,
+                                           candidates[0],
+                                           candidates[1],
+                                           candidates[2],
+                                           candidates[3],
+                                           data_store.dim(),
+                                           threshold,
+                                           distances.data());
+        }
+        Batch4(query, vertices, data_store, distances);
+        return 0x0f;
+    }
+#endif
 
     LVQDist ToLVQDistance(size_t dim) &&;
 
@@ -148,8 +241,8 @@ private:
 
 public:
     LVQL2Dist() : SIMDFunc(nullptr) {}
-    LVQL2Dist(LVQL2Dist &&other) : SIMDFunc(std::exchange(other.SIMDFunc, nullptr)) {}
-    LVQL2Dist &operator=(LVQL2Dist &&other) {
+    LVQL2Dist(LVQL2Dist &&other) noexcept : SIMDFunc(std::exchange(other.SIMDFunc, nullptr)) {}
+    LVQL2Dist &operator=(LVQL2Dist &&other) noexcept {
         if (this != &other) {
             SIMDFunc = std::exchange(other.SIMDFunc, nullptr);
         }
@@ -174,7 +267,8 @@ public:
     DistanceType operator()(const QueryType &v1, VertexType v2_i, const DataStore &data_store, VertexType v1_i = kInvalidVertex) const {
         const StoreType &v2 = data_store.GetVec(v2_i);
         size_t dim = data_store.dim();
-        return Inner(v1, v2, dim);
+        const DistanceType result = Inner(v1, v2, dim);
+        return result;
     }
 
 private:
@@ -211,8 +305,8 @@ private:
 
 public:
     RabitqL2Dist() : SIMDFunc(nullptr) {}
-    RabitqL2Dist(RabitqL2Dist &&other) : SIMDFunc(std::exchange(other.SIMDFunc, nullptr)) {}
-    RabitqL2Dist &operator=(RabitqL2Dist &&other) {
+    RabitqL2Dist(RabitqL2Dist &&other) noexcept : SIMDFunc(std::exchange(other.SIMDFunc, nullptr)) {}
+    RabitqL2Dist &operator=(RabitqL2Dist &&other) noexcept {
         if (this != &other) {
             SIMDFunc = std::exchange(other.SIMDFunc, nullptr);
         }

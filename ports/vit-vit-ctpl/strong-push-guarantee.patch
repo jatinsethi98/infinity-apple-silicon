@@ -1,0 +1,402 @@
+--- a/ctpl_stl.h
++++ b/ctpl_stl.h
+@@ -29,6 +29,7 @@
+ #include <future>
+ #include <mutex>
+ #include <queue>
++#include <stdexcept>
+ 
+ 
+ 
+@@ -46,6 +47,9 @@
+         public:
+             bool push(T const & value) {
+                 std::unique_lock<std::mutex> lock(this->mutex);
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_QUEUE_COMMIT)
++                CTPL_STL_TEST_HOOK_BEFORE_QUEUE_COMMIT();
++#endif
+                 this->q.push(value);
+                 return true;
+             }
+@@ -62,6 +66,10 @@
+                 std::unique_lock<std::mutex> lock(this->mutex);
+                 return this->q.empty();
+             }
++            void swap(std::queue<T> & values) {
++                std::unique_lock<std::mutex> lock(this->mutex);
++                this->q.swap(values);
++            }
+         private:
+             std::queue<T> q;
+             std::mutex mutex;
+@@ -72,6 +80,8 @@
+ 
+     public:
+ 
++        static constexpr bool push_has_strong_exception_guarantee = true;
++
+         thread_pool() { this->init(); }
+         thread_pool(int nThreads) { this->init(); this->resize(nThreads); }
+ 
+@@ -85,50 +95,109 @@
+ 
+         // number of idle threads
+         int n_idle() { return this->nWaiting; }
++        bool owns_current_thread() const noexcept { return current_thread_pool() == this; }
+         std::thread & get_thread(int i) { return *this->threads[i]; }
+ 
+         // change the number of threads in the pool
+-        // should be called from one thread, otherwise be careful to not interleave, also with this->stop()
+         // nThreads must be >= 0
+         void resize(int nThreads) {
++            if (this->owns_current_thread()) {
++                throw std::logic_error("thread_pool worker cannot downsize its own pool");
++            }
++            if (nThreads < 0) {
++                throw std::invalid_argument("thread_pool size cannot be negative");
++            }
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_RESIZE_LIFECYCLE_LOCK)
++            CTPL_STL_TEST_HOOK_BEFORE_RESIZE_LIFECYCLE_LOCK(nThreads);
++#endif
++            std::unique_lock<std::mutex> lifecycle_lock(this->lifecycle_mutex);
++#if defined(CTPL_STL_TEST_HOOK_AFTER_RESIZE_LIFECYCLE_LOCK)
++            CTPL_STL_TEST_HOOK_AFTER_RESIZE_LIFECYCLE_LOCK(nThreads);
++#endif
+             if (!this->isStop && !this->isDone) {
+                 int oldNThreads = static_cast<int>(this->threads.size());
+-                if (oldNThreads <= nThreads) {  // if the number of threads is increased
+-                    this->threads.resize(nThreads);
+-                    this->flags.resize(nThreads);
+-
+-                    for (int i = oldNThreads; i < nThreads; ++i) {
+-                        this->flags[i] = std::make_shared<std::atomic<bool>>(false);
+-                        this->set_thread(i);
++                if (oldNThreads < nThreads) {  // if the number of threads is increased
++                    std::promise<bool> startup_promise;
++                    std::shared_future<bool> startup_signal = startup_promise.get_future().share();
++                    std::vector<std::shared_ptr<std::atomic<bool>>> staged_flags;
++                    std::vector<std::unique_ptr<std::thread>> staged_threads;
++                    const std::size_t growth = static_cast<std::size_t>(nThreads - oldNThreads);
++                    try {
++                        this->threads.reserve(static_cast<std::size_t>(nThreads));
++                        this->flags.reserve(static_cast<std::size_t>(nThreads));
++                        staged_threads.reserve(growth);
++                        staged_flags.reserve(growth);
++                        for (int i = oldNThreads; i < nThreads; ++i) {
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_GROWTH_FLAG)
++                            CTPL_STL_TEST_HOOK_BEFORE_GROWTH_FLAG(i);
++#endif
++                            std::shared_ptr<std::atomic<bool>> flag = std::make_shared<std::atomic<bool>>(false);
++                            staged_flags.push_back(flag);
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_GROWTH_THREAD)
++                            CTPL_STL_TEST_HOOK_BEFORE_GROWTH_THREAD(i);
++#endif
++                            staged_threads.push_back(this->make_thread(i, flag, startup_signal));
++                        }
+                     }
+-                }
+-                else {  // the number of threads is decreased
+-                    for (int i = oldNThreads - 1; i >= nThreads; --i) {
+-                        *this->flags[i] = true;  // this thread will finish
+-                        this->threads[i]->detach();
++                    catch (...) {
++                        startup_promise.set_value(false);
++                        for (std::size_t i = 0; i < staged_threads.size(); ++i) {
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_STAGED_THREAD_JOIN)
++                            CTPL_STL_TEST_HOOK_BEFORE_STAGED_THREAD_JOIN(oldNThreads + static_cast<int>(i));
++#endif
++                            if (staged_threads[i]->joinable())
++                                staged_threads[i]->join();
++                        }
++                        throw;
+                     }
++                    for (std::size_t i = 0; i < growth; ++i) {
++                        this->flags.push_back(std::move(staged_flags[i]));
++                        this->threads.push_back(std::move(staged_threads[i]));
++                    }
++                    startup_promise.set_value(true);
++                }
++                else if (oldNThreads > nThreads) {  // the number of threads is decreased
+                     {
+-                        // stop the detached threads that were waiting
+                         std::unique_lock<std::mutex> lock(this->mutex);
++                        for (int i = oldNThreads - 1; i >= nThreads; --i) {
++                            *this->flags[i] = true;  // this thread will finish
++                        }
++                        // stop the retiring threads that were waiting
+                         this->cv.notify_all();
+                     }
+-                    this->threads.resize(nThreads);  // safe to delete because the threads are detached
+-                    this->flags.resize(nThreads);  // safe to delete because the threads have copies of shared_ptr of the flags, not originals
++#if defined(CTPL_STL_TEST_HOOK_AFTER_RETIRE_REQUEST)
++                    CTPL_STL_TEST_HOOK_AFTER_RETIRE_REQUEST();
++#endif
++                    for (int i = nThreads; i < oldNThreads; ++i) {
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_RETIRED_THREAD_JOIN)
++                        CTPL_STL_TEST_HOOK_BEFORE_RETIRED_THREAD_JOIN();
++#endif
++                        if (this->threads[i]->joinable())
++                            this->threads[i]->join();
++                    }
++                    this->threads.resize(nThreads);
++                    this->flags.resize(nThreads);
+                 }
+             }
+         }
+ 
+         // empty the queue
+         void clear_queue() {
+-            std::function<void(int id)> * _f;
+-            while (this->q.pop(_f))
+-                delete _f; // empty the queue
++            std::queue<std::function<void(int id)> *> pending;
++            {
++                std::unique_lock<std::mutex> lock(this->mutex);
++                this->q.swap(pending);
++            }
++            this->delete_tasks(pending);
+         }
+ 
+         // pops a functional wrapper to the original function
+         std::function<void(int)> pop() {
+             std::function<void(int id)> * _f = nullptr;
+-            this->q.pop(_f);
++            {
++                std::unique_lock<std::mutex> lock(this->mutex);
++                this->q.pop(_f);
++            }
+             std::unique_ptr<std::function<void(int id)>> func(_f); // at return, delete the function even if an exception occurred
+             std::function<void(int)> f;
+             if (_f)
+@@ -140,6 +209,22 @@
+         // may be called asynchronously to not pause the calling thread while waiting
+         // if isWait == true, all the functions in the queue are run, otherwise the queue is cleared without running the functions
+         void stop(bool isWait = false) {
++            if (this->owns_current_thread()) {
++                throw std::logic_error("thread_pool worker cannot stop its own pool");
++            }
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_STOP_LIFECYCLE_LOCK)
++            CTPL_STL_TEST_HOOK_BEFORE_STOP_LIFECYCLE_LOCK(isWait);
++#endif
++            std::unique_lock<std::mutex> lifecycle_lock(this->lifecycle_mutex);
++#if defined(CTPL_STL_TEST_HOOK_AFTER_STOP_LIFECYCLE_LOCK)
++            CTPL_STL_TEST_HOOK_AFTER_STOP_LIFECYCLE_LOCK(isWait);
++#endif
++            std::queue<std::function<void(int id)> *> cancelled;
++            std::queue<std::function<void(int id)> *> abandoned;
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_STOP_LOCK)
++            CTPL_STL_TEST_HOOK_BEFORE_STOP_LOCK();
++#endif
++            std::unique_lock<std::mutex> lock(this->mutex);
+             if (!isWait) {
+                 if (this->isStop)
+                     return;
+@@ -147,26 +232,39 @@
+                 for (int i = 0, n = this->size(); i < n; ++i) {
+                     *this->flags[i] = true;  // command the threads to stop
+                 }
+-                this->clear_queue();  // empty the queue
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_CANCEL_QUEUE_EXTRACT)
++                CTPL_STL_TEST_HOOK_BEFORE_CANCEL_QUEUE_EXTRACT();
++#endif
++                this->q.swap(cancelled);
++#if defined(CTPL_STL_TEST_HOOK_AFTER_CANCEL_QUEUE_EXTRACT)
++                CTPL_STL_TEST_HOOK_AFTER_CANCEL_QUEUE_EXTRACT();
++#endif
+             }
+             else {
+                 if (this->isDone || this->isStop)
+                     return;
+                 this->isDone = true;  // give the waiting threads a command to finish
+             }
+-            {
+-                std::unique_lock<std::mutex> lock(this->mutex);
+-                this->cv.notify_all();  // stop all waiting threads
+-            }
++            this->cv.notify_all();  // stop all waiting threads
++            lock.unlock();
+             for (int i = 0; i < static_cast<int>(this->threads.size()); ++i) {  // wait for the computing threads to finish
+                     if (this->threads[i]->joinable())
+                         this->threads[i]->join();
+             }
+             // if there were no threads in the pool but some functors in the queue, the functors are not deleted by the threads
+             // therefore delete them here
+-            this->clear_queue();
++            {
++                std::unique_lock<std::mutex> remaining_lock(this->mutex);
++                this->q.swap(abandoned);
++            }
+             this->threads.clear();
+             this->flags.clear();
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_STOP_LIFECYCLE_RELEASE)
++            CTPL_STL_TEST_HOOK_BEFORE_STOP_LIFECYCLE_RELEASE(isWait);
++#endif
++            lifecycle_lock.unlock();
++            this->delete_tasks(cancelled);
++            this->delete_tasks(abandoned);
+         }
+ 
+         template<typename F, typename... Rest>
+@@ -174,13 +272,24 @@
+             auto pck = std::make_shared<std::packaged_task<decltype(f(0, rest...))(int)>>(
+                 std::bind(std::forward<F>(f), std::placeholders::_1, std::forward<Rest>(rest)...)
+                 );
+-            auto _f = new std::function<void(int id)>([pck](int id) {
++            auto future = pck->get_future();
++            std::unique_ptr<std::function<void(int id)>> task(new std::function<void(int id)>([pck](int id) {
+                 (*pck)(id);
+-            });
+-            this->q.push(_f);
++            }));
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_POOL_LOCK)
++            CTPL_STL_TEST_HOOK_BEFORE_POOL_LOCK();
++#endif
+             std::unique_lock<std::mutex> lock(this->mutex);
++            if (this->isStop || this->isDone) {
++                throw std::runtime_error("cannot push to a stopped thread_pool");
++            }
++#if defined(CTPL_STL_TEST_HOOK_AFTER_PUSH_VALIDATION)
++            CTPL_STL_TEST_HOOK_AFTER_PUSH_VALIDATION();
++#endif
++            this->q.push(task.get());
++            task.release();
+             this->cv.notify_one();
+-            return pck->get_future();
++            return future;
+         }
+ 
+         // run the user's function that excepts argument int - id of the running thread. returned value is templatized
+@@ -188,13 +297,24 @@
+         template<typename F>
+         auto push(F && f) ->std::future<decltype(f(0))> {
+             auto pck = std::make_shared<std::packaged_task<decltype(f(0))(int)>>(std::forward<F>(f));
+-            auto _f = new std::function<void(int id)>([pck](int id) {
++            auto future = pck->get_future();
++            std::unique_ptr<std::function<void(int id)>> task(new std::function<void(int id)>([pck](int id) {
+                 (*pck)(id);
+-            });
+-            this->q.push(_f);
++            }));
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_POOL_LOCK)
++            CTPL_STL_TEST_HOOK_BEFORE_POOL_LOCK();
++#endif
+             std::unique_lock<std::mutex> lock(this->mutex);
++            if (this->isStop || this->isDone) {
++                throw std::runtime_error("cannot push to a stopped thread_pool");
++            }
++#if defined(CTPL_STL_TEST_HOOK_AFTER_PUSH_VALIDATION)
++            CTPL_STL_TEST_HOOK_AFTER_PUSH_VALIDATION();
++#endif
++            this->q.push(task.get());
++            task.release();
+             this->cv.notify_one();
+-            return pck->get_future();
++            return future;
+         }
+ 
+ 
+@@ -206,31 +326,76 @@
+         thread_pool & operator=(const thread_pool &);// = delete;
+         thread_pool & operator=(thread_pool &&);// = delete;
+ 
+-        void set_thread(int i) {
+-            std::shared_ptr<std::atomic<bool>> flag(this->flags[i]); // a copy of the shared ptr to the flag
+-            auto f = [this, i, flag/* a copy of the shared ptr to the flag */]() {
++        static thread_pool *& current_thread_pool() {
++            static thread_local thread_pool *pool = nullptr;
++            return pool;
++        }
++
++        class worker_thread_scope {
++        public:
++            explicit worker_thread_scope(thread_pool *pool) : previous_(current_thread_pool()) { current_thread_pool() = pool; }
++            ~worker_thread_scope() { current_thread_pool() = previous_; }
++
++        private:
++            thread_pool *previous_;
++        };
++
++        static void delete_tasks(std::queue<std::function<void(int id)> *> & tasks) {
++            while (!tasks.empty()) {
++                delete tasks.front();
++                tasks.pop();
++            }
++        }
++
++        std::unique_ptr<std::thread> make_thread(int i,
++                                                const std::shared_ptr<std::atomic<bool>> & flag,
++                                                const std::shared_future<bool> & startup_signal) {
++            auto f = [this, i, flag, startup_signal]() {
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_GROWTH_GATE_WAIT)
++                CTPL_STL_TEST_HOOK_BEFORE_GROWTH_GATE_WAIT(i);
++#endif
++                const bool should_start = startup_signal.get();
++#if defined(CTPL_STL_TEST_HOOK_AFTER_GROWTH_GATE_WAIT)
++                CTPL_STL_TEST_HOOK_AFTER_GROWTH_GATE_WAIT(i, should_start);
++#endif
++                if (!should_start)
++                    return;
++                worker_thread_scope worker_scope(this);
+                 std::atomic<bool> & _flag = *flag;
+-                std::function<void(int id)> * _f;
+-                bool isPop = this->q.pop(_f);
+                 while (true) {
+-                    while (isPop) {  // if there is anything in the queue
+-                        std::unique_ptr<std::function<void(int id)>> func(_f); // at return, delete the function even if an exception occurred
+-                        (*_f)(i);
+-                        if (_flag)
+-                            return;  // the thread is wanted to stop, return even if the queue is not empty yet
+-                        else
+-                            isPop = this->q.pop(_f);
++#if defined(CTPL_STL_TEST_HOOK_BEFORE_WORKER_DEQUEUE_LOCK)
++                    CTPL_STL_TEST_HOOK_BEFORE_WORKER_DEQUEUE_LOCK(i);
++#endif
++                    std::function<void(int id)> * _f = nullptr;
++                    {
++                        std::unique_lock<std::mutex> lock(this->mutex);
++                        if (!_flag) {
++                            this->q.pop(_f);
++                        }
++                        if (!_f) {
++                            ++this->nWaiting;
++                            this->cv.wait(lock, [this, &_f, &_flag](){
++                                if (_flag)
++                                    return true;
++                                if (this->q.pop(_f))
++                                    return true;
++#if defined(CTPL_STL_TEST_HOOK_AFTER_EMPTY_POP)
++                                if (!this->isDone) {
++                                    CTPL_STL_TEST_HOOK_AFTER_EMPTY_POP();
++                                }
++#endif
++                                return this->isDone.load();
++                            });
++                            --this->nWaiting;
++                            if (!_f)
++                                return;  // the queue is empty and this->isDone == true or *flag
++                        }
+                     }
+-                    // the queue is empty here, wait for the next command
+-                    std::unique_lock<std::mutex> lock(this->mutex);
+-                    ++this->nWaiting;
+-                    this->cv.wait(lock, [this, &_f, &isPop, &_flag](){ isPop = this->q.pop(_f); return isPop || this->isDone || _flag; });
+-                    --this->nWaiting;
+-                    if (!isPop)
+-                        return;  // if the queue is empty and this->isDone == true or *flag then return
++                    std::unique_ptr<std::function<void(int id)>> func(_f); // delete the function even if an exception occurred
++                    (*_f)(i);
+                 }
+             };
+-            this->threads[i].reset(new std::thread(f)); // compiler may not support std::make_unique()
++            return std::unique_ptr<std::thread>(new std::thread(f)); // compiler may not support std::make_unique()
+         }
+ 
+         void init() { this->nWaiting = 0; this->isStop = false; this->isDone = false; }
+@@ -242,6 +407,7 @@
+         std::atomic<bool> isStop;
+         std::atomic<int> nWaiting;  // how many threads are waiting
+ 
++        std::mutex lifecycle_mutex;
+         std::mutex mutex;
+         std::condition_variable cv;
+     };

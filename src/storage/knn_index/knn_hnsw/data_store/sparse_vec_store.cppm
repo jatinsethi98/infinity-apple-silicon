@@ -20,6 +20,7 @@ export module infinity_core:sparse_vec_store;
 
 import :local_file_handle;
 import :hnsw_common;
+import :data_store_util;
 import :sparse_util;
 
 import std;
@@ -46,8 +47,11 @@ public:
     void Save(LocalFileHandle &file_handle) const { file_handle.Append(&max_dim_, sizeof(max_dim_)); }
 
     static This Load(LocalFileHandle &file_handle) {
-        size_t max_dim;
-        file_handle.Read(&max_dim, sizeof(max_dim));
+        const size_t max_dim = HnswReadStream<size_t>(file_handle, "sparse vector dimension");
+        if (max_dim == 0 || max_dim > static_cast<size_t>(std::numeric_limits<IdxType>::max())) {
+            HnswStreamError("sparse vector dimension is outside the index representation");
+        }
+        static_cast<void>(HnswStreamCheckedMultiply(sizeof(DataType), max_dim, "sparse vector dimension"));
         return This(max_dim);
     }
 
@@ -107,27 +111,68 @@ public:
     }
 
     static This Load(LocalFileHandle &file_handle, size_t cur_vec_num, size_t max_vec_num, const Meta &meta, size_t &mem_usage) {
-        size_t nnz = 0;
-        file_handle.Read(&nnz, sizeof(nnz));
-        auto indptr = std::make_unique_for_overwrite<i32[]>(cur_vec_num + 1);
-        file_handle.Read(indptr.get(), sizeof(i32) * (cur_vec_num + 1));
-        auto indice = std::make_unique_for_overwrite<IdxType[]>(nnz);
-        file_handle.Read(indice.get(), sizeof(IdxType) * nnz);
-        auto data = std::make_unique_for_overwrite<DataType[]>(nnz);
-        file_handle.Read(data.get(), sizeof(DataType) * nnz);
+        if (cur_vec_num > max_vec_num) {
+            HnswStreamError("sparse vector count exceeds capacity");
+        }
+        const size_t nnz = HnswReadStream<size_t>(file_handle, "sparse nonzero count");
+        if (nnz > static_cast<size_t>(std::numeric_limits<i32>::max())) {
+            HnswStreamError("sparse nonzero count exceeds the row-offset representation");
+        }
+        const size_t indptr_count = HnswStreamCheckedAdd(cur_vec_num, 1, "sparse row offsets");
+        const size_t indptr_size = HnswStreamCheckedMultiply(sizeof(i32), indptr_count, "sparse row offsets");
+        const size_t indices_size = HnswStreamCheckedMultiply(sizeof(IdxType), nnz, "sparse indices");
+        const size_t data_size = HnswStreamCheckedMultiply(sizeof(DataType), nnz, "sparse values");
+        const size_t payload_size =
+            HnswStreamCheckedAdd(indptr_size, HnswStreamCheckedAdd(indices_size, data_size, "sparse payload"), "sparse payload");
+        HnswEnsureStreamAvailable(file_handle, payload_size, "sparse payload");
 
+        auto indptr = std::make_unique_for_overwrite<i32[]>(indptr_count);
+        HnswReadExact(file_handle, indptr.get(), indptr_size, "sparse row offsets");
+        auto indice = std::make_unique_for_overwrite<IdxType[]>(nnz);
+        HnswReadExact(file_handle, indice.get(), indices_size, "sparse indices");
+        auto data = std::make_unique_for_overwrite<DataType[]>(nnz);
+        HnswReadExact(file_handle, data.get(), data_size, "sparse values");
+
+        if (indptr[0] != 0) {
+            HnswStreamError("sparse row offsets must start at zero");
+        }
+        for (size_t row = 0; row < cur_vec_num; ++row) {
+            if (indptr[row] < 0 || indptr[row + 1] < indptr[row] ||
+                static_cast<size_t>(indptr[row + 1]) > nnz) {
+                HnswStreamError("sparse row offsets are not monotonic and bounded");
+            }
+            for (i32 position = indptr[row]; position < indptr[row + 1]; ++position) {
+                const IdxType index = indice[position];
+                if constexpr (std::is_signed_v<IdxType>) {
+                    if (index < 0) {
+                        HnswStreamError("sparse index is negative");
+                    }
+                }
+                if (static_cast<size_t>(index) >= meta.dim() ||
+                    (position > indptr[row] && indice[position - 1] >= index)) {
+                    HnswStreamError("sparse row indices must be in range and strictly increasing");
+                }
+            }
+        }
+        if (static_cast<size_t>(indptr[cur_vec_num]) != nnz) {
+            HnswStreamError("sparse final row offset does not match the nonzero count");
+        }
+
+        const size_t vec_array_size = HnswStreamCheckedMultiply(sizeof(SparseVecEle), max_vec_num, "sparse vector capacity");
+        const size_t element_size = HnswStreamCheckedAdd(sizeof(IdxType), sizeof(DataType), "sparse element");
+        const size_t element_memory = HnswStreamCheckedMultiply(element_size, nnz, "sparse elements");
+        const size_t loaded_memory = HnswStreamCheckedAdd(vec_array_size, element_memory, "sparse vector memory usage");
         This ret(max_vec_num, meta);
-        mem_usage += sizeof(SparseVecEle) * max_vec_num;
         for (size_t i = 0; i < cur_vec_num; ++i) { // todo: optimize it
             SparseVecEle &vec = ret.vecs_[i];
             vec.nnz_ = indptr[i + 1] - indptr[i];
             vec.indices_ = std::make_unique_for_overwrite<IdxType[]>(vec.nnz_);
             vec.data_ = std::make_unique_for_overwrite<DataType[]>(vec.nnz_);
-            mem_usage += sizeof(IdxType) * vec.nnz_ + sizeof(DataType) * vec.nnz_;
 
             std::copy(indice.get() + indptr[i], indice.get() + indptr[i + 1], vec.indices_.get());
             std::copy(data.get() + indptr[i], data.get() + indptr[i + 1], vec.data_.get());
         }
+        mem_usage = HnswStreamCheckedAdd(mem_usage, loaded_memory, "sparse vector memory usage");
         return ret;
     }
 

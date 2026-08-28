@@ -16,6 +16,7 @@ module;
 
 #include <cassert>
 #include <cerrno>
+#include <limits>
 
 module infinity_core:persistence_manager.impl;
 
@@ -39,6 +40,22 @@ namespace fs = std::filesystem;
 
 namespace infinity {
 constexpr size_t BUFFER_SIZE = 1024 * 1024; // 1 MB
+
+namespace {
+
+size_t CheckedAdd(size_t left, size_t right, std::string_view operation) {
+    if (right > std::numeric_limits<size_t>::max() - left) {
+        UnrecoverableError(fmt::format("{} size overflow: {} + {}", operation, left, right));
+    }
+    return left + right;
+}
+
+size_t CheckedAlignUp(size_t value, size_t alignment, std::string_view operation) {
+    assert(alignment > 0 && (alignment & (alignment - 1)) == 0);
+    return CheckedAdd(value, alignment - 1, operation) & ~(alignment - 1);
+}
+
+} // namespace
 
 nlohmann::json ObjAddr::Serialize() const {
     nlohmann::json obj;
@@ -172,12 +189,11 @@ PersistWriteResult PersistenceManager::Persist(const std::string &file_path, con
         result.obj_addr_ = obj_addr;
     } else {
         std::lock_guard<std::mutex> lock(mtx_);
-        if (int(src_size) >= CurrentObjRoomNoLock()) {
+        if (src_size >= CurrentObjRoomNoLock()) {
             CurrentObjFinalizeNoLock(result.persist_keys_);
         }
-        current_object_size_ = (current_object_size_ + ObjAlignment - 1) & ~(ObjAlignment - 1);
-        ObjAddr obj_addr(current_object_key_, current_object_size_, src_size);
-        CurrentObjAppendNoLock(tmp_file_path, src_size);
+        const size_t part_offset = CurrentObjAppendNoLock(tmp_file_path, src_size);
+        ObjAddr obj_addr(current_object_key_, part_offset, src_size);
         fs::remove(tmp_file_path, ec);
         if (ec) {
             UnrecoverableError(fmt::format("Failed to remove {}", tmp_file_path));
@@ -271,20 +287,65 @@ void PersistenceManager::CheckValid() {
 
 void PersistenceManager::CurrentObjFinalizeNoLock(std::vector<std::string> &persist_keys) {
     if (current_object_size_ > 0) {
-        persist_keys.push_back(current_object_key_);
         if (current_object_parts_ > 1) {
             // Add footer to composed object -- format version 1
             fs::path dst_fp = workspace_;
             dst_fp.append(current_object_key_);
-            std::ofstream outFile(dst_fp, std::ios::app);
-            if (!outFile.is_open()) {
-                UnrecoverableError(fmt::format("Failed to open file {}.", dst_fp.string()));
+            std::error_code ec;
+            const size_t original_size = fs::file_size(dst_fp, ec);
+            if (ec) {
+                UnrecoverableError(fmt::format("Failed to get size of composed object {}: {}", dst_fp.string(), ec.message()));
             }
-            const u32 compose_format = 1;
-            outFile.write((char *)&compose_format, sizeof(u32));
-            outFile.close();
+            if (original_size != current_object_size_) {
+                UnrecoverableError(fmt::format("Composed object {} physical size {} differs from logical size {} before finalization",
+                                               dst_fp.string(),
+                                               original_size,
+                                               current_object_size_));
+            }
+
+            try {
+                std::ofstream out_file(dst_fp, std::ios::binary | std::ios::app);
+                if (!out_file.is_open()) {
+                    throw std::runtime_error(fmt::format("Failed to open {}", dst_fp.string()));
+                }
+                const u32 compose_format = 1;
+                out_file.write(reinterpret_cast<const char *>(&compose_format), sizeof(compose_format));
+                if (!out_file.good()) {
+                    throw std::runtime_error(fmt::format("Failed to write footer to {}", dst_fp.string()));
+                }
+                out_file.flush();
+                if (!out_file.good()) {
+                    throw std::runtime_error(fmt::format("Failed to flush footer to {}", dst_fp.string()));
+                }
+                out_file.close();
+                if (out_file.fail()) {
+                    throw std::runtime_error(fmt::format("Failed to close {}", dst_fp.string()));
+                }
+                const size_t expected_size = CheckedAdd(original_size, sizeof(compose_format), "Finalize composed object");
+                const size_t actual_size = fs::file_size(dst_fp, ec);
+                if (ec || actual_size != expected_size) {
+                    throw std::runtime_error(
+                        fmt::format("Finalized object {} size mismatch: expected {}, got {} ({})",
+                                    dst_fp.string(),
+                                    expected_size,
+                                    actual_size,
+                                    ec ? ec.message() : "no filesystem error"));
+                }
+            } catch (const std::exception &error) {
+                std::error_code rollback_ec;
+                fs::resize_file(dst_fp, original_size, rollback_ec);
+                if (rollback_ec) {
+                    UnrecoverableError(fmt::format("Failed to finalize composed object {}: {}; rollback to {} bytes also failed: {}",
+                                                   dst_fp.string(),
+                                                   error.what(),
+                                                   original_size,
+                                                   rollback_ec.message()));
+                }
+                UnrecoverableError(fmt::format("Failed to finalize composed object {}: {}", dst_fp.string(), error.what()));
+            }
         }
 
+        persist_keys.push_back(current_object_key_);
         object_stats_->PutNew(current_object_key_, std::make_shared<ObjStat>(current_object_size_, current_object_parts_, current_object_ref_count_));
         LOG_TRACE(fmt::format("CurrentObjFinalizeNoLock added composed object {}", current_object_key_));
         current_object_key_ = ObjCreate();
@@ -431,11 +492,28 @@ PersistWriteResult PersistenceManager::PutObjCache(const std::string &file_path)
 
 std::string PersistenceManager::ObjCreate() { return UUID().to_string(); }
 
-int PersistenceManager::CurrentObjRoomNoLock() { return int(object_size_limit_) - int(current_object_size_); }
+size_t PersistenceManager::CurrentObjRoomNoLock() {
+    const size_t aligned_size = CheckedAlignUp(current_object_size_, ObjAlignment, "Align current persistence object");
+    if (aligned_size >= object_size_limit_) {
+        return 0;
+    }
+    return object_size_limit_ - aligned_size;
+}
 
-void PersistenceManager::CurrentObjAppendNoLock(const std::string &tmp_file_path, size_t file_size) {
+size_t PersistenceManager::CurrentObjAppendNoLock(const std::string &tmp_file_path, size_t file_size) {
     fs::path src_fp = tmp_file_path;
     fs::path dst_fp = fs::path(workspace_) / current_object_key_;
+    const size_t original_logical_size = current_object_size_;
+    const size_t original_parts = current_object_parts_;
+    const size_t part_offset = CheckedAlignUp(original_logical_size, ObjAlignment, "Align persistence part");
+    if (part_offset >= object_size_limit_ || file_size >= object_size_limit_ - part_offset) {
+        UnrecoverableError(fmt::format("CurrentObjAppendNoLock object {} cannot fit {} bytes at offset {} below limit {}",
+                                       current_object_key_,
+                                       file_size,
+                                       part_offset,
+                                       object_size_limit_));
+    }
+    const size_t expected_final_size = CheckedAdd(part_offset, file_size, "Append persistence part");
 
     // Debug: Check if this is a dictionary file
     bool is_dict_file = tmp_file_path.find(".dic") != std::string::npos;
@@ -443,47 +521,161 @@ void PersistenceManager::CurrentObjAppendNoLock(const std::string &tmp_file_path
         LOG_DEBUG(fmt::format("CurrentObjAppendNoLock: Processing dictionary file {} (size: {})", tmp_file_path, file_size));
     }
 
-    std::ifstream srcFile(src_fp, std::ios::binary);
-    if (!srcFile.is_open()) {
-        UnrecoverableError(fmt::format("Failed to open source file {}", tmp_file_path));
+    std::error_code ec;
+    const size_t observed_source_size = fs::file_size(src_fp, ec);
+    if (ec) {
+        UnrecoverableError(fmt::format("Failed to get source file size {}: {}", tmp_file_path, ec.message()));
     }
-    std::ofstream dstFile(dst_fp, std::ios::binary | std::ios::app);
-    if (!dstFile.is_open()) {
-        UnrecoverableError(fmt::format("Failed to open destination file {} {}", strerror(errno), dst_fp.string()));
+    if (observed_source_size != file_size) {
+        UnrecoverableError(fmt::format("Source file {} size changed before append: expected {}, got {}",
+                                       tmp_file_path,
+                                       file_size,
+                                       observed_source_size));
     }
-    {
-        dstFile.seekp(0, std::ios::end);
-        size_t current_size = dstFile.tellp();
-        if (current_size < current_object_size_) {
-            std::vector<char> zero_padding(current_object_size_ - current_size, 0);
-            dstFile.write(zero_padding.data(), zero_padding.size());
+
+    const bool destination_existed = fs::exists(dst_fp, ec);
+    if (ec) {
+        UnrecoverableError(fmt::format("Failed to inspect destination file {}: {}", dst_fp.string(), ec.message()));
+    }
+    const size_t original_physical_size = destination_existed ? fs::file_size(dst_fp, ec) : 0;
+    if (ec) {
+        UnrecoverableError(fmt::format("Failed to get destination file size {}: {}", dst_fp.string(), ec.message()));
+    }
+    if (original_physical_size != original_logical_size) {
+        UnrecoverableError(fmt::format("Destination object {} physical size {} differs from logical size {}",
+                                       dst_fp.string(),
+                                       original_physical_size,
+                                       original_logical_size));
+    }
+
+    auto buffer = std::make_unique_for_overwrite<char[]>(BUFFER_SIZE);
+    std::ifstream src_file;
+    std::ofstream dst_file;
+    bool destination_opened = false;
+    try {
+        src_file.open(src_fp, std::ios::binary);
+        if (!src_file.is_open()) {
+            throw std::runtime_error(fmt::format("Failed to open source file {}", tmp_file_path));
         }
+        dst_file.open(dst_fp, std::ios::binary | std::ios::app);
+        if (!dst_file.is_open()) {
+            throw std::runtime_error(fmt::format("Failed to open destination file {}: {}", dst_fp.string(), strerror(errno)));
+        }
+        destination_opened = true;
+
+        const std::array<char, ObjAlignment> zero_padding{};
+        const size_t padding_size = part_offset - original_logical_size;
+        if (padding_size > 0) {
+            dst_file.write(zero_padding.data(), static_cast<std::streamsize>(padding_size));
+            if (!dst_file.good()) {
+                throw std::runtime_error(fmt::format("Failed to write {} padding bytes to {}", padding_size, dst_fp.string()));
+            }
+        }
+
+        size_t copied = 0;
+        while (copied < file_size) {
+            const size_t requested = std::min(BUFFER_SIZE, file_size - copied);
+            src_file.read(buffer.get(), static_cast<std::streamsize>(requested));
+            const std::streamsize read_count = src_file.gcount();
+            if (read_count != static_cast<std::streamsize>(requested)) {
+                throw std::runtime_error(
+                    fmt::format("Short read from {} at offset {}: expected {}, got {}",
+                                tmp_file_path,
+                                copied,
+                                requested,
+                                read_count));
+            }
+            dst_file.write(buffer.get(), read_count);
+            if (!dst_file.good()) {
+                throw std::runtime_error(
+                    fmt::format("Failed to write {} bytes to {} at offset {}",
+                                read_count,
+                                dst_fp.string(),
+                                part_offset + copied));
+            }
+            copied += static_cast<size_t>(read_count);
+        }
+
+        char extra_byte{};
+        src_file.read(&extra_byte, 1);
+        if (src_file.gcount() != 0) {
+            throw std::runtime_error(fmt::format("Source file {} grew during append", tmp_file_path));
+        }
+        if (src_file.bad()) {
+            throw std::runtime_error(fmt::format("Failed to check EOF for source file {}", tmp_file_path));
+        }
+        src_file.clear();
+        const size_t final_source_size = fs::file_size(src_fp, ec);
+        if (ec || final_source_size != file_size) {
+            throw std::runtime_error(
+                fmt::format("Source file {} size changed during append: expected {}, got {} ({})",
+                            tmp_file_path,
+                            file_size,
+                            final_source_size,
+                            ec ? ec.message() : "no filesystem error"));
+        }
+
+        src_file.close();
+        if (src_file.fail()) {
+            throw std::runtime_error(fmt::format("Failed to close source file {}", tmp_file_path));
+        }
+        dst_file.flush();
+        if (!dst_file.good()) {
+            throw std::runtime_error(fmt::format("Failed to flush destination file {}", dst_fp.string()));
+        }
+        dst_file.close();
+        if (dst_file.fail()) {
+            throw std::runtime_error(fmt::format("Failed to close destination file {}", dst_fp.string()));
+        }
+        const size_t actual_final_size = fs::file_size(dst_fp, ec);
+        if (ec || actual_final_size != expected_final_size) {
+            throw std::runtime_error(
+                fmt::format("Destination object {} size mismatch: expected {}, got {} ({})",
+                            dst_fp.string(),
+                            expected_final_size,
+                            actual_final_size,
+                            ec ? ec.message() : "no filesystem error"));
+        }
+    } catch (const std::exception &error) {
+        if (src_file.is_open()) {
+            src_file.clear();
+            src_file.close();
+        }
+        if (dst_file.is_open()) {
+            dst_file.clear();
+            dst_file.close();
+        }
+        std::error_code rollback_ec;
+        if (destination_existed) {
+            fs::resize_file(dst_fp, original_physical_size, rollback_ec);
+        } else if (destination_opened || fs::exists(dst_fp)) {
+            fs::remove(dst_fp, rollback_ec);
+        }
+        current_object_size_ = original_logical_size;
+        current_object_parts_ = original_parts;
+        if (rollback_ec) {
+            UnrecoverableError(fmt::format("Failed to append {} to object {}: {}; rollback to {} bytes also failed: {}",
+                                           tmp_file_path,
+                                           current_object_key_,
+                                           error.what(),
+                                           original_physical_size,
+                                           rollback_ec.message()));
+        }
+        UnrecoverableError(fmt::format("Failed to append {} to object {}: {}", tmp_file_path, current_object_key_, error.what()));
     }
-    char buffer[BUFFER_SIZE];
-    while (srcFile.read(buffer, BUFFER_SIZE)) {
-        dstFile.write(buffer, srcFile.gcount());
-    }
-    // Write any remaining bytes from the last read
-    if (srcFile.gcount() > 0) {
-        dstFile.write(buffer, srcFile.gcount());
-    }
-    srcFile.close();
-    current_object_size_ += file_size;
-    current_object_parts_++;
-    if (current_object_size_ >= object_size_limit_) {
-        UnrecoverableError(
-            fmt::format("CurrentObjAppendNoLock object {} size {} exceeds limit {}", current_object_key_, current_object_size_, object_size_limit_));
-    }
-    dstFile.close();
+
+    current_object_size_ = expected_final_size;
+    current_object_parts_ = original_parts + 1;
 
     // Debug: Log completion for dictionary files
     if (is_dict_file) {
         LOG_DEBUG(fmt::format("CurrentObjAppendNoLock: Completed processing dictionary file {} -> object {} (offset: {}, size: {})",
                               tmp_file_path,
                               current_object_key_,
-                              current_object_size_ - file_size,
+                              part_offset,
                               file_size));
     }
+    return part_offset;
 }
 
 void PersistenceManager::CleanupNoLock(const ObjAddr &object_addr,

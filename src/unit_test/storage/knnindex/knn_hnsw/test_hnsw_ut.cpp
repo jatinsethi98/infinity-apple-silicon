@@ -269,6 +269,115 @@ public:
         }
     }
 
+    template <typename CompressedStoreType, typename Compress>
+    void TestCompactCompressedPointerImage(const std::string &filename, Compress compress) {
+        constexpr size_t dim = 9;
+        constexpr size_t element_size = 3;
+        constexpr size_t chunk_size = 2;
+        constexpr size_t max_chunk_n = 2;
+        constexpr size_t M = 2;
+        constexpr size_t ef_construction = 8;
+        constexpr LabelT label_base = 0x0102030405060708ULL;
+        using PlainHnsw = KnnHnsw<PlainL2VecStoreType<float>, LabelT>;
+        using CompressedHnsw = KnnHnsw<CompressedStoreType, LabelT>;
+        using MappedHnsw = KnnHnsw<CompressedStoreType, LabelT, false>;
+        using MappedMeta = typename CompressedStoreType::template Meta<false>;
+
+        const std::array<float, dim * element_size> data{
+            -4.0f, -3.0f, -2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f, 4.0f,
+            7.0f,  6.0f,  5.0f,  4.0f,  3.0f, 2.0f, 1.0f, 0.0f, -1.0f,
+            0.5f,  1.5f,  2.5f,  3.5f,  4.5f, 5.5f, 6.5f, 7.5f, 8.5f,
+        };
+
+        auto plain = PlainHnsw::Make(chunk_size, max_chunk_n, dim, M, ef_construction);
+        auto iter = DenseVectorIter<float, LabelT>(data.data(), dim, element_size, label_base);
+        ASSERT_EQ(plain->StoreData(std::move(iter)), (std::pair<VertexType, VertexType>{0, element_size}));
+        plain->Build(0, 1);
+        plain->Build(1, 0);
+        plain->Build(2, 0);
+        plain->Check();
+
+        std::unique_ptr<CompressedHnsw> compressed = compress(std::move(*plain));
+        ASSERT_NE(compressed, nullptr);
+
+        auto verify = [&](const auto &index) {
+            index->Check();
+            ASSERT_EQ(index->GetVecNum(), element_size);
+            for (VertexType vertex = 0; vertex < static_cast<VertexType>(element_size); ++vertex) {
+                EXPECT_EQ(index->GetLabel(vertex), label_base + static_cast<LabelT>(vertex));
+            }
+            for (size_t query = 0; query < element_size; ++query) {
+                const auto result =
+                    index->KnnSearchSorted(data.data() + query * dim, element_size, KnnSearchOption{.ef_ = element_size});
+                ASSERT_EQ(result.size(), element_size);
+                std::array<bool, element_size> labels_seen{};
+                for (const auto &[distance, label] : result) {
+                    EXPECT_TRUE(std::isfinite(distance));
+                    ASSERT_GE(label, label_base);
+                    ASSERT_LT(label, label_base + element_size);
+                    labels_seen[static_cast<size_t>(label - label_base)] = true;
+                }
+                EXPECT_TRUE(std::ranges::all_of(labels_seen, std::identity{}));
+            }
+        };
+        verify(compressed);
+
+        const std::string filepath = save_dir_ + "/" + filename;
+        {
+            auto [file_handle, status] = VirtualStore::Open(filepath, FileAccessMode::kWrite);
+            ASSERT_TRUE(status.ok()) << status.message();
+            compressed->SaveToPtr(*file_handle);
+        }
+        size_t file_size = VirtualStore::GetFileSize(filepath);
+        ASSERT_GT(file_size, 0u);
+
+        {
+            auto [file_handle, status] = VirtualStore::Open(filepath, FileAccessMode::kRead);
+            ASSERT_TRUE(status.ok()) << status.message();
+            auto loaded = CompressedHnsw::LoadFromPtr(*file_handle, file_size);
+            verify(loaded);
+        }
+
+        u8 *mapped_bytes = nullptr;
+        ASSERT_EQ(VirtualStore::MmapFile(filepath, mapped_bytes, file_size), 0);
+        {
+            const char *const image = reinterpret_cast<const char *>(mapped_bytes);
+            HnswPointerReader section_reader(image, file_size);
+            EXPECT_EQ(section_reader.Read<size_t>("test HNSW M"), M);
+            EXPECT_EQ(section_reader.Read<size_t>("test HNSW ef_construction"), ef_construction);
+            EXPECT_EQ(section_reader.Read<size_t>("test vector count"), element_size);
+            MappedMeta mapped_meta = MappedMeta::LoadFromPtr(section_reader);
+            GraphStoreMeta graph_meta = GraphStoreMeta::LoadFromPtr(section_reader);
+            section_reader.ReadBytes(element_size * mapped_meta.compress_data_size(), "test compressed vectors");
+            const size_t layer_sum = section_reader.Read<size_t>("test upper-layer count");
+            ASSERT_EQ(layer_sum, 1u);
+            const char *const serialized_graph = section_reader.current();
+            ASSERT_NE(reinterpret_cast<std::uintptr_t>(serialized_graph) % alignof(void *), 0u);
+            const size_t graph_size = element_size * graph_meta.level0_size();
+            const size_t layers_size = layer_sum * graph_meta.levelx_size();
+            section_reader.ReadBytes(graph_size, "test graph");
+            const char *const serialized_layers = section_reader.current();
+            ASSERT_NE(reinterpret_cast<std::uintptr_t>(serialized_layers) % alignof(VertexType), 0u);
+            section_reader.ReadBytes(layers_size, "test upper layers");
+            section_reader.ReadBytes(element_size * sizeof(LabelT), "test labels");
+            section_reader.RequireEmpty();
+
+            const char *cursor = image;
+            auto mapped = MappedHnsw::LoadFromPtr(cursor, file_size);
+            ASSERT_EQ(cursor, image + file_size);
+            EXPECT_EQ(mapped->mem_usage(), graph_size + layers_size);
+            verify(mapped);
+
+            std::vector<char> image_with_trailing_byte(image, image + file_size);
+            image_with_trailing_byte.push_back('\0');
+            const char *trailing_cursor = image_with_trailing_byte.data();
+            const char *const original_cursor = trailing_cursor;
+            EXPECT_THROW(static_cast<void>(MappedHnsw::LoadFromPtr(trailing_cursor, image_with_trailing_byte.size())), std::invalid_argument);
+            EXPECT_EQ(trailing_cursor, original_cursor);
+        }
+        ASSERT_EQ(VirtualStore::MunmapFile(filepath), 0);
+    }
+
     template <typename Hnsw>
     void TestParallel() {
         int dim = 16;
@@ -321,37 +430,31 @@ public:
                 auto iter = DenseVectorIter<float, LabelT>(data.get(), dim, element_size / 2);
                 std::tie(start_i, end_i) = hnsw_index->StoreData(std::move(iter), {true});
             }
-            {
-                auto write_thread2 = std::thread([&] {
-                    int insert_n = element_size - element_size / 2;
-                    for (int i = element_size / 2; i < element_size; ++i) {
-                        DenseVectorIter<float, LabelT> iter(data.get(), dim, 1 /*insert_n*/);
-                        hnsw_index->InsertVecs(std::move(iter));
-                        if ((i + 1) % (insert_n / 4) == 0) {
-                            auto w_lck = UniqueOptLck();
-                            hnsw_index->Optimize();
+            std::atomic<i32> idx = start_i;
+            std::vector<std::thread> worker_threads;
+            for (int i = 0; i < 4; ++i) {
+                worker_threads.emplace_back([&] {
+                    while (true) {
+                        i32 i = idx.fetch_add(1);
+                        if (i >= end_i) {
+                            break;
                         }
+                        auto r_lck = SharedOptLck();
+                        hnsw_index->Build(i);
                     }
                 });
+            }
+            for (auto &worker_thread : worker_threads) {
+                worker_thread.join();
+            }
 
-                std::atomic<i32> idx = start_i;
-                std::vector<std::thread> worker_threads;
-                for (int i = 0; i < 4; ++i) {
-                    worker_threads.emplace_back([&] {
-                        while (true) {
-                            i32 i = idx.fetch_add(1);
-                            if (i >= end_i) {
-                                break;
-                            }
-                            auto r_lck = SharedOptLck();
-                            hnsw_index->Build(i);
-                        }
-                    });
-                }
-                for (int i = 0; i < 4; ++i) {
-                    worker_threads[i].join();
-                }
-                write_thread2.join();
+            const int append_n = element_size - end_i;
+            auto append_iter =
+                DenseVectorIter<float, LabelT>(data.get() + end_i * dim, dim, append_n, static_cast<LabelT>(end_i));
+            hnsw_index->InsertVecs(std::move(append_iter));
+            {
+                auto w_lck = UniqueOptLck();
+                hnsw_index->Optimize();
             }
             stop.store(true);
         });
@@ -374,6 +477,9 @@ public:
         for (auto &t : read_threads) {
             t.join();
         }
+        EXPECT_EQ(hnsw_index->GetVecNum(), static_cast<size_t>(element_size));
+        EXPECT_FALSE(hnsw_index->IsBuildFailed());
+        hnsw_index->Check();
     }
 };
 
@@ -435,4 +541,18 @@ TEST_F(HnswAlgTest, test_rabitq_2) {
 TEST_F(HnswAlgTest, test_rabitq_3) {
     using Hnsw = KnnHnsw<RabitqL2VecStoreType<float>, LabelT>;
     TestParallel<Hnsw>();
+}
+
+TEST_F(HnswAlgTest, compact_lvq_pointer_image_aligns_graph_sidecars) {
+    using Store = LVQL2VecStoreType<float, i8>;
+    TestCompactCompressedPointerImage<Store>(
+        "compact_lvq_pointer_image.bin",
+        [](auto &&plain) { return std::move(plain).CompressToLVQ(); });
+}
+
+TEST_F(HnswAlgTest, compact_rabitq_pointer_image_aligns_graph_sidecars) {
+    using Store = RabitqL2VecStoreType<float>;
+    TestCompactCompressedPointerImage<Store>(
+        "compact_rabitq_pointer_image.bin",
+        [](auto &&plain) { return std::move(plain).CompressToRabitq(); });
 }

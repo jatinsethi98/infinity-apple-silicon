@@ -1,4 +1,11 @@
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/bin/compilation_config.cppm.in ${CMAKE_CURRENT_SOURCE_DIR}/bin/compilation_config.cppm)
+set(INFINITY_GENERATED_MODULE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(INFINITY_COMPILATION_CONFIG_MODULE
+        "${INFINITY_GENERATED_MODULE_DIR}/compilation_config.cppm")
+configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/bin/compilation_config.cppm.in"
+        "${INFINITY_COMPILATION_CONFIG_MODULE}"
+        @ONLY
+)
 
 ### Infinity
 
@@ -13,6 +20,8 @@ file(GLOB_RECURSE
         CONFIGURE_DEPENDS
         bin/*.cppm
 )
+list(REMOVE_ITEM main_cppm
+        "${CMAKE_CURRENT_SOURCE_DIR}/bin/compilation_config.cppm")
 
 file(GLOB_RECURSE
         infinity_cpp
@@ -251,7 +260,9 @@ add_library(infinity_core
 
 target_sources(infinity_core
         PUBLIC
-        FILE_SET core_cxx_modules TYPE CXX_MODULES FILES
+        FILE_SET core_cxx_modules TYPE CXX_MODULES
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+        FILES
         ${main_cppm}
         ${infinity_cppm}
         ${common_cppm}
@@ -279,6 +290,10 @@ target_sources(infinity_core
         ${admin_impl_cpp}
         ${network_impl_cpp}
         #        ${parser_impl_cpp}
+
+        FILE_SET generated_cxx_modules TYPE CXX_MODULES
+        BASE_DIRS "${INFINITY_GENERATED_MODULE_DIR}"
+        FILES "${INFINITY_COMPILATION_CONFIG_MODULE}"
 )
 
 #if (ARCH_AARCH64)
@@ -327,6 +342,18 @@ add_subdirectory(parser)
 
 add_dependencies(infinity miniocpp curlpp_static libcurl_static)
 
+set(INFINITY_PLATFORM_LIBRARIES
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND INFINITY_PLATFORM_LIBRARIES
+            resolv.a
+            atomic.a
+            libstdc++exp.a
+    )
+endif ()
+
 target_link_libraries(infinity
         PUBLIC
         infinity_core
@@ -338,7 +365,7 @@ target_link_libraries(infinity
         jma
         opencc
         #        $<IF:$<BOOL:${ARM64}>,opencc,>
-        dl
+        ${INFINITY_PLATFORM_LIBRARIES}
         Boost::asio
         thrift::thrift
         # thriftnb::thriftnb
@@ -347,8 +374,7 @@ target_link_libraries(infinity
         Parquet::parquet_static
         Arrow::arrow_static
         ${JEMALLOC_STATIC_LIB}
-        miniocpp.a
-        # miniocpp::miniocpp
+        miniocpp::miniocpp
         pugixml::static
         curlpp_static
         unofficial::inih::libinih
@@ -369,9 +395,6 @@ target_link_libraries(infinity
         fmt::fmt
         # turbo::base64
         ZLIB::ZLIB
-        resolv.a
-        atomic.a
-        libstdc++exp.a
 )
 target_link_directories(infinity PUBLIC "${CMAKE_BINARY_DIR}/lib")
 target_link_directories(infinity PUBLIC "${CMAKE_BINARY_DIR}/third_party/minio-cpp/")
@@ -432,7 +455,7 @@ target_link_libraries(unit_test
         ${FASTPFOR_STATIC_LIB}
         jma
         opencc
-        dl
+        ${INFINITY_PLATFORM_LIBRARIES}
         Boost::asio
         thrift::thrift
         # thriftnb::thriftnb
@@ -441,8 +464,7 @@ target_link_libraries(unit_test
         Parquet::parquet_static
         Arrow::arrow_static
         ${JEMALLOC_STATIC_LIB}
-        miniocpp.a
-        # miniocpp::miniocpp
+        miniocpp::miniocpp
         pugixml::static
         curlpp_static
         unofficial::inih::libinih
@@ -462,9 +484,6 @@ target_link_libraries(unit_test
         spdlog::spdlog
         fmt::fmt
         ZLIB::ZLIB
-        resolv.a
-        atomic.a
-        libstdc++exp.a
 )
 
 target_compile_options(unit_test PRIVATE

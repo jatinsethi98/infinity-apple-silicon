@@ -123,6 +123,7 @@ export import :dist_func_lsg_wrapper;
 export import :hnsw_util;
 export import :hnsw_common;
 export import :hnsw_handler;
+export import :hnsw_bulk_build;
 export import :dist_func_sparse_ip;
 export import :hnsw_alg;
 export import :dist_func_ip;

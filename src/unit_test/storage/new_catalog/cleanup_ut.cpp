@@ -245,6 +245,9 @@ protected:
     }
 
 protected:
+    using TxnPtr = decltype(std::declval<NewTxnManager *>()->BeginTxn(std::declval<std::unique_ptr<std::string>>(),
+                                                                     std::declval<TransactionType>()));
+
     NewTxnManager *new_txn_mgr_{};
 
     std::shared_ptr<std::string> db_name_;
@@ -255,8 +258,8 @@ protected:
 
     std::shared_ptr<std::string> index_name1_;
     std::shared_ptr<IndexBase> index_def1_;
-    NewTxn *txn_clean_{};
-    NewTxn *txn_other_{};
+    TxnPtr txn_clean_{};
+    TxnPtr txn_other_{};
     static constexpr std::array<std::string, 12> plans_{/*"abcABC",*/
                                                         "abAcBC",
                                                         "abABcC",

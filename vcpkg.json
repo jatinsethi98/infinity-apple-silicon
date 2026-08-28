@@ -5,10 +5,17 @@
   "homepage": "https://github.com/infiniflow/infinity",
   "license": "Apache-2.0",
   "builtin-baseline": "aa40adda5352e87655b8583cfb2451d5e9e276fd",
+  "default-features": [
+    "jemalloc"
+  ],
   "dependencies": [
     "abseil",
     "arrow",
-    "boost",
+    "boost-asio",
+    "boost-container",
+    "boost-dynamic-bitset",
+    "boost-interprocess",
+    "boost-thread",
     "bzip2",
     "brotli",
     "cli11",
@@ -16,7 +23,6 @@
     "fmt",
     "gtest",
     "inih",
-    "jemalloc",
     "libevent",
     "lz4",
     "magic-enum",
@@ -44,5 +50,13 @@
       "host": true
     },
     "vit-vit-ctpl"
-  ]
+  ],
+  "features": {
+    "jemalloc": {
+      "description": "Use jemalloc instead of the platform allocator",
+      "dependencies": [
+        "jemalloc"
+      ]
+    }
+  }
 }

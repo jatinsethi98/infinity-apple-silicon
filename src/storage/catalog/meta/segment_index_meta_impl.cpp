@@ -227,6 +227,18 @@ std::shared_ptr<MemIndex> SegmentIndexMeta::GetMemIndex(bool for_update) {
     return new_catalog->GetMemIndex(mem_index_key, for_update);
 }
 
+std::shared_ptr<MemIndex> SegmentIndexMeta::TryReserveMemIndexForDump(const std::shared_ptr<MemIndex> &expected_mem_index) {
+    std::string mem_index_key = GetSegmentIndexTag("mem_index");
+    NewCatalog *new_catalog = InfinityContext::instance().storage()->new_catalog();
+    return new_catalog->TryReserveMemIndexForDump(mem_index_key, expected_mem_index);
+}
+
+bool SegmentIndexMeta::PopReservedMemIndex(const std::shared_ptr<MemIndex> &expected_mem_index) {
+    std::string mem_index_key = GetSegmentIndexTag("mem_index");
+    NewCatalog *new_catalog = InfinityContext::instance().storage()->new_catalog();
+    return new_catalog->PopReservedMemIndex(mem_index_key, expected_mem_index);
+}
+
 std::shared_ptr<MemIndex> SegmentIndexMeta::PopMemIndex() {
     std::string mem_index_key = GetSegmentIndexTag("mem_index");
     NewCatalog *new_catalog = InfinityContext::instance().storage()->new_catalog();

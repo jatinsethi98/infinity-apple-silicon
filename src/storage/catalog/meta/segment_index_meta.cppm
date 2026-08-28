@@ -63,6 +63,8 @@ public:
     Status UninitSet1(UsageFlag usage_flag);
 
     std::shared_ptr<MemIndex> GetMemIndex(bool for_update = false);
+    std::shared_ptr<MemIndex> TryReserveMemIndexForDump(const std::shared_ptr<MemIndex> &expected_mem_index = nullptr);
+    bool PopReservedMemIndex(const std::shared_ptr<MemIndex> &expected_mem_index);
     std::shared_ptr<MemIndex> PopMemIndex();
 
     std::shared_ptr<std::string> GetSegmentIndexDir() const;

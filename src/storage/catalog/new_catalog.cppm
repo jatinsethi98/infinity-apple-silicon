@@ -172,6 +172,9 @@ private:
 
 public:
     std::shared_ptr<MemIndex> GetMemIndex(const std::string &mem_index_key, bool for_update);
+    std::shared_ptr<MemIndex> TryReserveMemIndexForDump(const std::string &mem_index_key,
+                                                        const std::shared_ptr<MemIndex> &expected_mem_index = nullptr);
+    bool PopReservedMemIndex(const std::string &mem_index_key, const std::shared_ptr<MemIndex> &expected_mem_index);
     std::shared_ptr<MemIndex> PopMemIndex(const std::string &mem_index_key);
     Status DropMemIndexByMemIndexKey(const std::string &mem_index_key);
     std::vector<std::pair<std::string, std::string>> GetAllMemIndexInfo();

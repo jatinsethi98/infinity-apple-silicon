@@ -57,7 +57,7 @@ protected:
             hnsw_index->InsertVecs(std::move(iter));
 
             {
-                std::filesystem::path dump_path = std::filesystem::path(GetFullDataDir()) / "dump.txt";
+                std::filesystem::path dump_path = std::filesystem::path(save_dir_) / "dump.txt";
                 std::fstream ss(dump_path, std::fstream::out);
                 if (!ss.is_open()) {
                     UnrecoverableError("Failed to open file");

@@ -30,6 +30,10 @@ export using infinity::IsAVX512Supported;
 export using infinity::IsAVX512BWSupported;
 
 export using F32DistanceFuncType = f32 (*)(const f32 *, const f32 *, size_t);
+#if defined(__APPLE__) && defined(__aarch64__)
+export using F32DistanceBatch4FuncType = void (*)(const f32 *, const f32 *, const f32 *, const f32 *, const f32 *, size_t, f32 *);
+export using F32DistanceBatch4ThresholdFuncType = u8 (*)(const f32 *, const f32 *, const f32 *, const f32 *, const f32 *, size_t, f32, f32 *);
+#endif
 export using I8DistanceFuncType = i32 (*)(const i8 *, const i8 *, size_t);
 export using I8CosDistanceFuncType = f32 (*)(const i8 *, const i8 *, size_t);
 export using U8DistanceFuncType = i32 (*)(const u8 *, const u8 *, size_t);
@@ -54,6 +58,12 @@ export U8HammingDistanceFuncType GetHammingDistanceFuncPtr();
 // HNSW F32
 export F32DistanceFuncType Get_HNSW_F32L2_ptr();
 export F32DistanceFuncType Get_HNSW_F32L2_16_ptr();
+#if defined(__APPLE__) && defined(__aarch64__)
+export F32DistanceBatch4FuncType Get_HNSW_F32L2_BATCH4_ptr();
+export F32DistanceBatch4FuncType Get_HNSW_F32L2_BATCH4_16_ptr();
+export F32DistanceBatch4ThresholdFuncType Get_HNSW_F32L2_BATCH4_THRESHOLD_ptr();
+export F32DistanceBatch4ThresholdFuncType Get_HNSW_F32L2_BATCH4_THRESHOLD_16_ptr();
+#endif
 export F32DistanceFuncType Get_HNSW_F32IP_ptr();
 export F32DistanceFuncType Get_HNSW_F32IP_16_ptr();
 export F32DistanceFuncType Get_HNSW_F32Cos_ptr();

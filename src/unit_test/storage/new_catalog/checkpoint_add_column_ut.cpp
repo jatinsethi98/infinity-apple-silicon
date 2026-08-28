@@ -119,8 +119,7 @@ TEST_P(TestTxnCheckpointAddColumnTest, addcol_checkpoint_insert) {
     };
 
     Status status;
-    NewTxn *txn;
-    txn = new_txn_mgr->BeginTxn(std::make_unique<std::string>("create table"), TransactionType::kCreateTable);
+    auto *txn = new_txn_mgr->BeginTxn(std::make_unique<std::string>("create table"), TransactionType::kCreateTable);
     status = txn->CreateTable(*db_name, table_def, ConflictType::kError);
     EXPECT_TRUE(status.ok());
     status = new_txn_mgr->CommitTxn(txn);

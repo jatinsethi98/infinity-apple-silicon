@@ -152,7 +152,7 @@ TEST_F(ByteSliceReaderWriterTest, test5) {
 
 TEST_F(ByteSliceReaderWriterTest, test6) {
     using namespace infinity;
-    std::string path = "/var/infinity/tmp/test001.txt";
+    std::string path = std::string(GetFullTmpDir()) + "/test001.txt";
 
     // Prepare data
     ByteSliceWriter writer;

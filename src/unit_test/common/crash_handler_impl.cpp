@@ -17,6 +17,11 @@ module;
 #include <csignal>
 #include <cstdio>
 
+#if defined(__APPLE__)
+#include <cstdlib>
+#include <execinfo.h>
+#endif
+
 module infinity_core:ut.crash_handler.impl;
 
 import :ut.crash_handler;
@@ -120,7 +125,24 @@ void CrashHandler::PrintCrashInfo(int signal, const char *test_name) {
 
     // Use directly (same as Infinity's PrintStacktrace)
     try {
+#if defined(__APPLE__)
+        constexpr int kMaxStackFrames = 128;
+        void *frames[kMaxStackFrames];
+        const int frame_count = backtrace(frames, kMaxStackFrames);
+        char **symbols = backtrace_symbols(frames, frame_count);
+        std::ostringstream trace_stream;
+        if (symbols != nullptr) {
+            for (int idx = 0; idx < frame_count; ++idx) {
+                trace_stream << symbols[idx] << '\n';
+            }
+            std::free(symbols);
+        } else {
+            trace_stream << "Failed to generate stacktrace\n";
+        }
+        std::string trace = trace_stream.str();
+#else
         std::string trace = to_string(std::stacktrace::current());
+#endif
 
         // Print error message first
         std::string crash_msg = std::string("Test crash with signal ") + std::to_string(signal) + " (" + signal_name + ")";

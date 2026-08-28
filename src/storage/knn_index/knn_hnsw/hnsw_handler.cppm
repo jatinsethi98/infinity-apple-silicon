@@ -5,6 +5,7 @@
 export module infinity_core:hnsw_handler;
 
 import :hnsw_alg;
+import :hnsw_bulk_build;
 import :data_store;
 import :vec_store_type;
 import :dist_func_l2;
@@ -115,6 +116,7 @@ public:
     template <typename DistanceT, typename LabelT, typename Filter = std::nullopt_t, bool WithLock = true>
     std::tuple<size_t, std::unique_ptr<DistanceT[]>, std::unique_ptr<LabelT[]>>
     SearchIndex(const auto &q, size_t k, const Filter &filter, const KnnSearchOption &option = {}) const {
+        std::shared_lock handler_lock(hnsw_mutex_);
         std::tuple<size_t, std::unique_ptr<DistanceT[]>, std::unique_ptr<LabelT[]>> res{};
         std::visit(
             [&](auto &&index) {
@@ -132,6 +134,7 @@ public:
     template <typename DistanceT, typename LabelT, bool WithLock = true>
     std::tuple<size_t, std::unique_ptr<DistanceT[]>, std::unique_ptr<LabelT[]>>
     SearchIndex(const auto *q, size_t k, const KnnSearchOption &option = {}) const {
+        std::shared_lock handler_lock(hnsw_mutex_);
         std::tuple<size_t, std::unique_ptr<DistanceT[]>, std::unique_ptr<LabelT[]>> res{};
         std::visit(
             [&](auto &&index) {
@@ -149,7 +152,8 @@ public:
 private:
     template <typename Iter, typename Index>
     static void InsertVecs(Index &index, Iter &&iter, const HnswInsertConfig &config, size_t &mem_usage, size_t kBuildBucketSize = 1024) {
-        auto &thread_pool = InfinityContext::instance().GetHnswBuildThreadPool();
+        auto thread_pool_lease = InfinityContext::instance().AcquireHnswBuildThreadPool();
+        auto &thread_pool = thread_pool_lease.Get();
         if (thread_pool.size() == 0) {
             LOG_CRITICAL(fmt::format("Dense index building worker: {}", InfinityContext::instance().config()->DenseIndexBuildingWorker()));
             UnrecoverableError("Hnsw build thread pool size is 0, config.");
@@ -160,27 +164,7 @@ private:
             if constexpr (!IndexT::kOwnMem) {
                 UnrecoverableError("HnswHandler::InsertVecs: index does not own memory");
             } else {
-                size_t mem1 = index->mem_usage();
-                auto [start, end] = index->StoreData(std::forward<Iter>(iter), config);
-                size_t bucket_size = std::max(kBuildBucketSize, size_t(end - start - 1) / thread_pool.size() + 1);
-                size_t bucket_n = (end - start - 1) / bucket_size + 1;
-
-                std::vector<std::future<void>> futs;
-                futs.reserve(bucket_n);
-                for (size_t i = 0; i < bucket_n; ++i) {
-                    size_t i1 = start + i * bucket_size;
-                    size_t i2 = std::min(i1 + bucket_size, size_t(end));
-                    futs.emplace_back(thread_pool.push([&index, i1, i2](int id) {
-                        for (size_t j = i1; j < i2; ++j) {
-                            index->Build(j);
-                        }
-                    }));
-                }
-                for (auto &fut : futs) {
-                    fut.get();
-                }
-                size_t mem2 = index->mem_usage();
-                mem_usage = mem2 - mem1;
+                mem_usage = HnswBulkBuild(index, std::forward<Iter>(iter), config, thread_pool, kBuildBucketSize).mem_usage_;
             }
         }
     }
@@ -195,6 +179,7 @@ public:
 
     template <typename Iter>
     size_t InsertVecs(Iter iter, const HnswInsertConfig &config = kDefaultHnswInsertConfig, size_t kBuildBucketSize = 1024) {
+        std::shared_lock handler_lock(hnsw_mutex_);
         size_t mem_usage{};
         std::visit(
             [&](auto &&index) {
@@ -217,6 +202,7 @@ public:
     template <typename LabelT>
     std::pair<VertexType, VertexType>
     StoreData(const auto *data, size_t dim, size_t vec_num, const HnswInsertConfig &option = kDefaultHnswInsertConfig) {
+        std::shared_lock handler_lock(hnsw_mutex_);
         std::pair<VertexType, VertexType> res{};
         std::visit(
             [&](auto &&index) {
@@ -240,6 +226,7 @@ public:
     }
     template <typename LabelT>
     LabelT GetLabel(VertexType vertex_i) const {
+        std::shared_lock handler_lock(hnsw_mutex_);
         LabelT res{};
         std::visit(
             [&](auto &&index) {
@@ -258,6 +245,7 @@ public:
     // LSG setting
     template <typename Iter>
     size_t InsertSampleVecs(Iter iter, size_t sample_num = std::numeric_limits<size_t>::max()) {
+        std::unique_lock handler_lock(hnsw_mutex_);
         size_t insert_num = 0;
         std::visit(
             [&](auto &&index) {
@@ -273,6 +261,7 @@ public:
 
     template <typename Iter>
     void InsertLSAvg(Iter iter, size_t row_count) {
+        std::unique_lock handler_lock(hnsw_mutex_);
         std::visit(
             [&](auto &&index) {
                 using T = std::decay_t<decltype(index)>;
@@ -292,10 +281,13 @@ public:
     size_t GetRowCount() const;
     size_t GetSizeInBytes() const;
     std::pair<size_t, size_t> GetInfo() const;
+    void MarkBuildFailed();
+    bool IsBuildFailed() const;
     void Check() const;
 
 public:
     // hnsw_ data operator
+    void Save(LocalFileHandle &file_handle) const;
     void SaveToPtr(LocalFileHandle &file_handle) const;
     void Load(LocalFileHandle &file_handle);
     void LoadFromPtr(LocalFileHandle &file_handle, size_t file_size);
@@ -306,6 +298,7 @@ public:
     void CompressToRabitq();
 
 private:
+    mutable std::shared_mutex hnsw_mutex_;
     AbstractHnsw hnsw_ = nullptr;
 };
 
@@ -334,9 +327,17 @@ public:
 
     template <typename Iter>
     void InsertVecs(Iter iter, const HnswInsertConfig &config = kDefaultHnswInsertConfig) {
-        size_t mem_usage = hnsw_handler_->InsertVecs(std::move(iter), config, kBuildBucketSize);
-        row_count_ += iter.GetRowCount();
-        IncreaseMemoryUsageBase(mem_usage);
+        const size_t mem_before = hnsw_handler_->MemUsage();
+        const size_t inserted_rows = iter.GetRowCount();
+        try {
+            size_t mem_usage = hnsw_handler_->InsertVecs(std::move(iter), config, kBuildBucketSize);
+            row_count_ += inserted_rows;
+            IncreaseMemoryUsageBase(mem_usage);
+        } catch (...) {
+            const size_t mem_after = hnsw_handler_->MemUsage();
+            IncreaseMemoryUsageBase(mem_after > mem_before ? mem_after - mem_before : 0);
+            throw;
+        }
     }
 
     void Dump(BufferObj *buffer_obj, size_t *dump_size_ptr = nullptr);
@@ -363,6 +364,7 @@ public:
     HnswHandlerPtr *get_ptr() { return &hnsw_handler_; }
     size_t GetRowCount() const;
     size_t GetSizeInBytes() const;
+    bool IsBuildFailed() const;
 
     const ChunkIndexMetaInfo GetChunkIndexMetaInfo() const override;
 

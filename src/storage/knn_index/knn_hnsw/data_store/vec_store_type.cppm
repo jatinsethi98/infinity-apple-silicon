@@ -62,6 +62,7 @@ public:
     using QueryType = typename Meta<true>::QueryType;
     using Distance = std::conditional_t<LSG, PlainCosLSGDist<DataType>, PlainCosDist<DataType>>;
 
+    static constexpr bool IsPlainDense = true;
     static constexpr bool HasOptimize = false;
 
     template <typename CompressType>
@@ -86,6 +87,7 @@ public:
     using QueryType = typename Meta<true>::QueryType;
     using Distance = std::conditional_t<LSG, PlainL2LSGDist<DataType>, PlainL2Dist<DataType>>;
 
+    static constexpr bool IsPlainDense = true;
     static constexpr bool HasOptimize = false;
 
     template <typename CompressType>
@@ -110,6 +112,7 @@ public:
     using QueryType = typename Meta<true>::QueryType;
     using Distance = std::conditional_t<LSG, PlainIPLSGDist<DataType>, PlainIPDist<DataType>>;
 
+    static constexpr bool IsPlainDense = true;
     static constexpr bool HasOptimize = false;
 
     template <typename CompressType>
@@ -135,6 +138,7 @@ public:
     using QueryType = typename Meta<true>::QueryType;
     using Distance = SparseIPDist<DataT, IndexT>;
 
+    static constexpr bool IsPlainDense = false;
     static constexpr bool HasOptimize = false;
 
     template <typename CompressType>
@@ -162,6 +166,7 @@ public:
     using QueryType = typename MetaType::QueryType;
     using Distance = std::conditional_t<LSG, LVQCosLSGDist<DataType, CompressType, LVQCacheType>, LVQCosDist<DataType, CompressType>>;
 
+    static constexpr bool IsPlainDense = false;
     static constexpr bool HasOptimize = true;
 
     template <typename CompressType>
@@ -189,6 +194,7 @@ public:
     using QueryType = typename MetaType::QueryType;
     using Distance = std::conditional_t<LSG, LVQL2LSGDist<DataType, CompressType, LVQCacheType>, LVQL2Dist<DataType, CompressType>>;
 
+    static constexpr bool IsPlainDense = false;
     static constexpr bool HasOptimize = true;
 
     template <typename CompressType>
@@ -216,6 +222,7 @@ public:
     using QueryType = typename MetaType::QueryType;
     using Distance = std::conditional_t<LSG, LVQIPLSGDist<DataType, CompressType, LVQCacheType>, LVQIPDist<DataType, CompressType>>;
 
+    static constexpr bool IsPlainDense = false;
     static constexpr bool HasOptimize = true;
 
     template <typename CompressType>
@@ -241,6 +248,7 @@ public:
     using QueryType = typename MetaType::QueryType;
     using Distance = std::conditional_t<LSG, RabitqCosLSGDist<DataType>, RabitqCosDist<DataType>>;
 
+    static constexpr bool IsPlainDense = false;
     static constexpr bool HasOptimize = true;
 
     template <typename CompressType>
@@ -266,6 +274,7 @@ public:
     using QueryType = typename MetaType::QueryType;
     using Distance = std::conditional_t<LSG, RabitqL2LSGDist<DataType>, RabitqL2Dist<DataType>>;
 
+    static constexpr bool IsPlainDense = false;
     static constexpr bool HasOptimize = true;
 
     template <typename CompressType>
@@ -291,6 +300,7 @@ public:
     using QueryType = typename MetaType::QueryType;
     using Distance = std::conditional_t<LSG, RabitqIPLSGDist<DataType>, RabitqIPDist<DataType>>;
 
+    static constexpr bool IsPlainDense = false;
     static constexpr bool HasOptimize = true;
 
     template <typename CompressType>

@@ -25,12 +25,17 @@ import :graph_store;
 import :infinity_exception;
 import :data_store_util;
 import :plain_vec_store;
+export import :spinlock;
 
 import std;
 
 import serialize;
 
 namespace infinity {
+
+export using HnswVertexMutex = std::shared_mutex;
+export using HnswVertexSharedLock = std::shared_lock<HnswVertexMutex>;
+export using HnswVertexUniqueLock = std::unique_lock<HnswVertexMutex>;
 
 template <typename VecStoreT, typename LabelType, bool OwnMem>
 class DataStoreInner;
@@ -61,14 +66,20 @@ public:
     DataStoreBase() = default;
     DataStoreBase(VecStoreMeta &&vec_store_meta, GraphStoreMeta &&graph_store_meta)
         : vec_store_meta_(std::move(vec_store_meta)), graph_store_meta_(std::move(graph_store_meta)) {}
-    // DataStoreBase(This &&other) : vec_store_meta_(std::move(other.vec_store_meta_)), graph_store_meta_(std::move(other.graph_store_meta_)) {}
-    // DataStoreBase &operator=(This &&other) {
-    //     if (this != &other) {
-    //         vec_store_meta_ = std::move(other.vec_store_meta_);
-    //         graph_store_meta_ = std::move(other.graph_store_meta_);
-    //     }
-    //     return *this;
-    // }
+    DataStoreBase(This &&other) noexcept
+        : vec_store_meta_(std::move(other.vec_store_meta_)), graph_store_meta_(std::move(other.graph_store_meta_)) {
+        static_assert(std::is_nothrow_move_constructible_v<VecStoreMeta>);
+        static_assert(std::is_nothrow_move_constructible_v<GraphStoreMeta>);
+    }
+    DataStoreBase &operator=(This &&other) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<VecStoreMeta>);
+        static_assert(std::is_nothrow_move_assignable_v<GraphStoreMeta>);
+        if (this != &other) {
+            vec_store_meta_ = std::move(other.vec_store_meta_);
+            graph_store_meta_ = std::move(other.graph_store_meta_);
+        }
+        return *this;
+    }
     // ~DataStoreBase() = default;
 
     typename VecStoreT::QueryType MakeQuery(QueryVecType query) const { return vec_store_meta_.MakeQuery(query); }
@@ -84,6 +95,87 @@ public:
     size_t Mmax() const { return graph_store_meta_.Mmax(); }
 
 protected:
+    static void ValidatePointerImageEntryPoint(const GraphStoreMeta &graph_store_meta, size_t cur_vec_num) {
+        const auto [max_layer, entry_point] = graph_store_meta.GetEnterPoint();
+        if (cur_vec_num == 0) {
+            if (max_layer != -1 || entry_point != kInvalidVertex) {
+                HnswPointerImageError("empty graph has an entry point");
+            }
+            return;
+        }
+        if (entry_point < 0 || static_cast<size_t>(entry_point) >= cur_vec_num) {
+            HnswPointerImageError("graph entry point is out of range");
+        }
+    }
+
+    template <typename Store>
+    static void CheckGraphTopology(const Store &store, size_t cur_vec_num, i32 observed_max_layer) {
+        const auto [max_layer, entry_point] = store.GetEnterPoint();
+        if (observed_max_layer != max_layer) {
+            UnrecoverableError("max_l != max_layer");
+        }
+        if (cur_vec_num == 0) {
+            if (max_layer != -1 || entry_point != kInvalidVertex) {
+                UnrecoverableError("Empty HNSW graph has an entry point");
+            }
+            return;
+        }
+        if (entry_point < 0 || size_t(entry_point) >= cur_vec_num) {
+            UnrecoverableError("HNSW graph entry point is out of range");
+        }
+        if (store.GetLevel(entry_point) != max_layer) {
+            UnrecoverableError("HNSW graph entry point is not on the maximum level");
+        }
+
+        for (VertexType vertex = 0; size_t(vertex) < cur_vec_num; ++vertex) {
+            const LayerSize level = store.GetLevel(vertex);
+            for (i32 layer = 1; layer <= level; ++layer) {
+                const auto [neighbors, degree] = store.GetNeighbors(vertex, layer);
+                for (VertexListSize index = 0; index < degree; ++index) {
+                    if (store.GetLevel(neighbors[index]) < layer) {
+                        UnrecoverableError("HNSW upper-layer edge targets a lower-level vertex");
+                    }
+                }
+            }
+        }
+
+        std::vector<bool> visited(cur_vec_num, false);
+        std::vector<VertexType> pending;
+        pending.reserve(cur_vec_num);
+        pending.push_back(entry_point);
+        visited[size_t(entry_point)] = true;
+        for (size_t cursor = 0; cursor < pending.size(); ++cursor) {
+            const auto [neighbors, degree] = store.GetNeighbors(pending[cursor], 0);
+            for (VertexListSize index = 0; index < degree; ++index) {
+                const VertexType neighbor = neighbors[index];
+                if (!visited[size_t(neighbor)]) {
+                    visited[size_t(neighbor)] = true;
+                    pending.push_back(neighbor);
+                }
+            }
+        }
+        if (pending.size() == cur_vec_num) {
+            return;
+        }
+
+        std::vector<size_t> indegrees(cur_vec_num, 0);
+        for (VertexType source = 0; size_t(source) < cur_vec_num; ++source) {
+            const auto [neighbors, degree] = store.GetNeighbors(source, 0);
+            for (VertexListSize index = 0; index < degree; ++index) {
+                ++indegrees[size_t(neighbors[index])];
+            }
+        }
+        const auto first_unreachable = std::find(visited.begin(), visited.end(), false) - visited.begin();
+        const auto [unreachable_neighbors, unreachable_degree] =
+            store.GetNeighbors(static_cast<VertexType>(first_unreachable), 0);
+        static_cast<void>(unreachable_neighbors);
+        UnrecoverableError("HNSW level-zero graph is not reachable from the entry point: reached " +
+                           std::to_string(pending.size()) + "/" + std::to_string(cur_vec_num) +
+                           ", first unreachable vertex " + std::to_string(first_unreachable) +
+                           " has indegree " + std::to_string(indegrees[first_unreachable]) +
+                           " and outdegree " + std::to_string(unreachable_degree));
+    }
+
     VecStoreMeta vec_store_meta_;
     GraphStoreMeta graph_store_meta_;
 };
@@ -113,27 +205,37 @@ private:
 
 public:
     DataStore() = default;
-    DataStore(DataStore &&other) : Base(std::move(other)) {
+    static constexpr size_t OwnedMetadataBytesPerVertex() requires OwnMem {
+        return sizeof(LabelType) + sizeof(HnswVertexMutex);
+    }
+
+    DataStore(DataStore &&other) noexcept : Base(std::move(other)) {
         chunk_size_ = std::exchange(other.chunk_size_, 0);
         max_chunk_n_ = std::exchange(other.max_chunk_n_, 0);
         chunk_shift_ = std::exchange(other.chunk_shift_, 0);
         cur_vec_num_ = other.cur_vec_num_.exchange(0);
+        built_vec_num_ = other.built_vec_num_.exchange(0);
         inners_ = std::exchange(other.inners_, nullptr);
         mem_usage_ = other.mem_usage_.exchange(0);
     }
-    DataStore &operator=(DataStore &&other) {
+    DataStore &operator=(DataStore &&other) noexcept {
         if (this != &other) {
+            FreeInners();
             Base::operator=(std::move(other));
             chunk_size_ = std::exchange(other.chunk_size_, 0);
             max_chunk_n_ = std::exchange(other.max_chunk_n_, 0);
             chunk_shift_ = std::exchange(other.chunk_shift_, 0);
             cur_vec_num_ = other.cur_vec_num_.exchange(0);
+            built_vec_num_ = other.built_vec_num_.exchange(0);
             inners_ = std::exchange(other.inners_, nullptr);
             mem_usage_ = other.mem_usage_.exchange(0);
         }
         return *this;
     }
-    ~DataStore() {
+    ~DataStore() { FreeInners(); }
+
+private:
+    void FreeInners() noexcept {
         if (!inners_) {
             return;
         }
@@ -143,8 +245,10 @@ public:
             size_t chunk_size = (i < chunk_num - 1) ? chunk_size_ : last_chunk_size;
             inners_[i].Free(chunk_size, this->graph_store_meta_);
         }
+        inners_.reset();
     }
 
+public:
     static This Make(size_t chunk_size, size_t max_chunk_n, size_t dim, size_t Mmax0, size_t Mmax) {
         bool normalize = false;
         if constexpr (Base::template has_compress_type<VecStoreT>::value) {
@@ -154,6 +258,7 @@ public:
         GraphStoreMeta graph_store_meta = GraphStoreMeta::Make(Mmax0, Mmax);
         This ret(chunk_size, max_chunk_n, std::move(vec_store_meta), std::move(graph_store_meta));
         ret.cur_vec_num_ = 0;
+        ret.built_vec_num_ = 0;
 
         size_t mem_usage = 0;
         ret.inners_[0] = Inner::Make(chunk_size, ret.vec_store_meta_, ret.graph_store_meta_, mem_usage);
@@ -162,6 +267,7 @@ public:
     }
 
     void Save(LocalFileHandle &file_handle) const {
+        EnsureAllVerticesBuilt();
         size_t cur_vec_num = this->cur_vec_num();
         auto [chunk_num, last_chunk_size] = ChunkInfo(cur_vec_num);
 
@@ -178,6 +284,7 @@ public:
     }
 
     void SaveToPtr(LocalFileHandle &file_handle) const {
+        EnsureAllVerticesBuilt();
         size_t cur_vec_num = this->cur_vec_num();
 
         file_handle.Append(&cur_vec_num, sizeof(cur_vec_num));
@@ -188,57 +295,107 @@ public:
         Inner::SaveToPtr(file_handle, inners_.get(), this->vec_store_meta_, this->graph_store_meta_, chunk_size_, chunk_num, last_chunk_size);
     }
 
-    static This Load(LocalFileHandle &file_handle, size_t max_chunk_n = 0) {
-        size_t chunk_size;
-        file_handle.Read(&chunk_size, sizeof(chunk_size));
-        size_t max_chunk_n1;
-        file_handle.Read(&max_chunk_n1, sizeof(max_chunk_n1));
+    static This Load(LocalFileHandle &file_handle,
+                     size_t max_chunk_n = 0,
+                     std::optional<std::pair<size_t, size_t>> expected_graph_capacities = std::nullopt) {
+        const size_t chunk_size = HnswReadStream<size_t>(file_handle, "chunk size");
+        const size_t max_chunk_n1 = HnswReadStream<size_t>(file_handle, "chunk count");
+        if (chunk_size == 0 || !std::has_single_bit(chunk_size)) {
+            HnswStreamError("chunk size must be a nonzero power of two");
+        }
+        if (max_chunk_n1 == 0) {
+            HnswStreamError("chunk count must be nonzero");
+        }
+        const size_t serialized_capacity = HnswStreamCheckedMultiply(chunk_size, max_chunk_n1, "vector capacity");
+        if (serialized_capacity > static_cast<size_t>(std::numeric_limits<VertexType>::max())) {
+            HnswStreamError("vector capacity exceeds the vertex representation");
+        }
         if (max_chunk_n == 0) {
             max_chunk_n = max_chunk_n1;
         }
-        assert(max_chunk_n >= max_chunk_n1);
+        if (max_chunk_n < max_chunk_n1) {
+            HnswStreamError("requested chunk count is smaller than the serialized capacity");
+        }
+        const size_t load_capacity = HnswStreamCheckedMultiply(chunk_size, max_chunk_n, "loaded vector capacity");
+        if (load_capacity > static_cast<size_t>(std::numeric_limits<VertexType>::max())) {
+            HnswStreamError("loaded vector capacity exceeds the vertex representation");
+        }
 
-        size_t cur_vec_num;
-        file_handle.Read(&cur_vec_num, sizeof(cur_vec_num));
+        const size_t cur_vec_num = HnswReadStream<size_t>(file_handle, "vector count");
+        if (cur_vec_num > serialized_capacity) {
+            HnswStreamError("vector count exceeds the serialized capacity");
+        }
         VecStoreMeta vec_store_meta = VecStoreMeta::Load(file_handle);
-        GraphStoreMeta graph_store_meta = GraphStoreMeta::Load(file_handle);
+        GraphStoreMeta graph_store_meta = GraphStoreMeta::Load(file_handle, expected_graph_capacities);
 
         This ret = This(chunk_size, max_chunk_n, std::move(vec_store_meta), std::move(graph_store_meta));
-        ret.cur_vec_num_ = cur_vec_num;
 
         size_t mem_usage = 0;
         auto [chunk_num, last_chunk_size] = ret.ChunkInfo(cur_vec_num);
         for (size_t i = 0; i < chunk_num; ++i) {
             size_t cur_chunk_size = (i < chunk_num - 1) ? chunk_size : last_chunk_size;
-            ret.inners_[i] = Inner::Load(file_handle, cur_chunk_size, chunk_size, ret.vec_store_meta_, ret.graph_store_meta_, mem_usage);
+            ret.inners_[i] = Inner::Load(file_handle,
+                                         cur_chunk_size,
+                                         chunk_size,
+                                         ret.vec_store_meta_,
+                                         ret.graph_store_meta_,
+                                         mem_usage,
+                                         i * chunk_size,
+                                         cur_vec_num);
         }
         ret.mem_usage_.store(mem_usage);
+        ret.cur_vec_num_.store(cur_vec_num);
+        if (expected_graph_capacities) {
+            ret.ValidateLoadedStreamGraph();
+        }
+        ret.built_vec_num_.store(cur_vec_num);
         return ret;
     }
 
-    static This LoadFromPtr(const char *&ptr) {
-        size_t cur_vec_num = ReadBufAdv<size_t>(ptr);
-        VecStoreMeta vec_store_meta = VecStoreMeta::LoadFromPtr(ptr);
-        GraphStoreMeta graph_store_meta = GraphStoreMeta::LoadFromPtr(ptr);
-
-        size_t chunk_size = 1;
-        while (chunk_size < cur_vec_num) {
-            chunk_size <<= 1;
+    static This LoadFromPtr(HnswPointerReader &reader) {
+        const size_t cur_vec_num = reader.Read<size_t>("vector count");
+        if (cur_vec_num > static_cast<size_t>(std::numeric_limits<VertexType>::max())) {
+            HnswPointerImageError("vector count exceeds the vertex representation");
         }
+        VecStoreMeta vec_store_meta = VecStoreMeta::LoadFromPtr(reader);
+        GraphStoreMeta graph_store_meta = GraphStoreMeta::LoadFromPtr(reader);
+        Base::ValidatePointerImageEntryPoint(graph_store_meta, cur_vec_num);
+
+        const size_t chunk_size = cur_vec_num == 0 ? 1 : std::bit_ceil(cur_vec_num);
         This ret = This(chunk_size, 1 /*max_chunk_n*/, std::move(vec_store_meta), std::move(graph_store_meta));
-        ret.cur_vec_num_ = cur_vec_num;
 
         size_t mem_usage = 0;
-        ret.inners_[0] = Inner::LoadFromPtr(ptr, cur_vec_num, chunk_size, ret.vec_store_meta_, ret.graph_store_meta_, mem_usage);
+        ret.inners_[0] = Inner::LoadFromPtr(reader, cur_vec_num, chunk_size, ret.vec_store_meta_, ret.graph_store_meta_, mem_usage);
+        ret.cur_vec_num_ = cur_vec_num;
         ret.mem_usage_.store(mem_usage);
+        size_t built_vec_num = 0;
+        for (VertexType vertex = 0; size_t(vertex) < cur_vec_num; ++vertex) {
+            built_vec_num += ret.IsVertexBuilt(vertex);
+        }
+        ret.built_vec_num_.store(built_vec_num);
         return ret;
     }
 
-    void SetGraph(GraphStoreMeta &&graph_meta, std::vector<GraphStoreInner<OwnMem>> &&graph_inners) {
+    void ValidateGraphAttachment(size_t graph_inner_count, size_t built_vec_num) const {
+        const auto [chunk_num, last_chunk_size] = ChunkInfo(cur_vec_num());
+        static_cast<void>(last_chunk_size);
+        if (graph_inner_count != chunk_num || built_vec_num > cur_vec_num()) {
+            throw std::logic_error("Invalid HNSW graph attachment");
+        }
+    }
+
+    void SetGraph(GraphStoreMeta &&graph_meta,
+                  std::vector<GraphStoreInner<OwnMem>> &&graph_inners,
+                  size_t built_vec_num,
+                  size_t upper_layer_mem_usage) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<GraphStoreMeta>);
+        static_assert(std::is_nothrow_move_assignable_v<GraphStoreInner<OwnMem>>);
         this->graph_store_meta_ = std::move(graph_meta);
         for (size_t i = 0; i < graph_inners.size(); ++i) {
             inners_[i].SetGraphStoreInner(std::move(graph_inners[i]));
         }
+        built_vec_num_.store(built_vec_num, std::memory_order_release);
+        mem_usage_.fetch_add(upper_layer_mem_usage, std::memory_order_relaxed);
     }
 
     size_t GetSizeInBytes() const {
@@ -249,6 +406,7 @@ public:
         size += sizeof(chunk_size_);
         size += sizeof(max_chunk_n_);
         size += sizeof(cur_vec_num_);
+        size += sizeof(built_vec_num_);
         size += this->vec_store_meta_.GetSizeInBytes();
         size += this->graph_store_meta_.GetSizeInBytes();
         for (size_t i = 0; i < chunk_num; ++i) {
@@ -336,6 +494,7 @@ public:
         size_t mem_usage = 0;
         inner.AddVertex(idx, layer_n, this->graph_store_meta_, mem_usage);
         mem_usage_.fetch_add(mem_usage);
+        built_vec_num_.fetch_add(1, std::memory_order_release);
     }
 
     std::pair<VertexType *, VertexListSize *> GetNeighborsMut(VertexType vertex_i, i32 layer_i) {
@@ -348,6 +507,31 @@ public:
         return inner.GetNeighbors(idx, layer_i, this->graph_store_meta_);
     }
 
+    LayerSize GetLevel(VertexType vertex_i) const {
+        const auto &[inner, idx] = GetInner(vertex_i);
+        return inner.GetLevel(idx, this->graph_store_meta_);
+    }
+
+    bool IsVertexBuilt(VertexType vertex_i) const {
+        const auto &[inner, idx] = GetInner(vertex_i);
+        return inner.IsVertexBuilt(idx, this->graph_store_meta_);
+    }
+
+    bool AllVerticesBuilt() const {
+        if (this->Mmax0() == 0 && this->Mmax() == 0) {
+            return true;
+        }
+        return built_vec_num_.load(std::memory_order_acquire) == cur_vec_num_.load(std::memory_order_acquire);
+    }
+
+    size_t built_vec_num() const { return built_vec_num_.load(std::memory_order_acquire); }
+
+    void EnsureAllVerticesBuilt() const {
+        if (!AllVerticesBuilt()) {
+            throw std::logic_error("HNSW index contains stored but unbuilt vertices");
+        }
+    }
+
     std::pair<i32, VertexType> TryUpdateEnterPoint(i32 layer, VertexType vertex_i) {
         return this->graph_store_meta_.TryUpdateEnterPoint(layer, vertex_i);
     }
@@ -358,12 +542,12 @@ public:
         return inner.GetLabel(idx);
     }
 
-    std::shared_lock<std::shared_mutex> SharedLock(size_t vec_i) const {
+    HnswVertexSharedLock SharedLock(size_t vec_i) const {
         const auto &[inner, idx] = GetInner(vec_i);
         return inner.SharedLock(idx);
     }
 
-    std::unique_lock<std::shared_mutex> UniqueLock(size_t vec_i) {
+    HnswVertexUniqueLock UniqueLock(size_t vec_i) {
         const auto &[inner, idx] = GetInner(vec_i);
         return inner.UniqueLock(idx);
     }
@@ -379,6 +563,62 @@ public:
     DataStore<CompressVecStoreType, LabelType, OwnMem> CompressToRabitq() &&;
 
 private:
+    void ValidateLoadedStreamGraph() const {
+        const size_t vertex_count = cur_vec_num();
+        i32 observed_max_layer = -1;
+        for (VertexType vertex = 0; static_cast<size_t>(vertex) < vertex_count; ++vertex) {
+            const LayerSize level = GetLevel(vertex);
+            if (level < 0 || level > kHnswMaxSupportedLayer) {
+                HnswStreamError("graph contains an invalid vertex level");
+            }
+            observed_max_layer = std::max(observed_max_layer, level);
+        }
+
+        const auto [max_layer, entry_point] = this->GetEnterPoint();
+        if (max_layer != observed_max_layer) {
+            HnswStreamError("graph maximum layer does not match its vertices");
+        }
+        if (vertex_count == 0) {
+            if (max_layer != -1 || entry_point != kInvalidVertex) {
+                HnswStreamError("empty graph has an entry point");
+            }
+            return;
+        }
+        if (entry_point < 0 || static_cast<size_t>(entry_point) >= vertex_count || GetLevel(entry_point) != max_layer) {
+            HnswStreamError("graph entry point is invalid");
+        }
+        for (VertexType vertex = 0; static_cast<size_t>(vertex) < vertex_count; ++vertex) {
+            const LayerSize level = GetLevel(vertex);
+            for (LayerSize layer = 1; layer <= level; ++layer) {
+                const auto [neighbors, degree] = GetNeighbors(vertex, layer);
+                for (VertexListSize index = 0; index < degree; ++index) {
+                    if (GetLevel(neighbors[index]) < layer) {
+                        HnswStreamError("upper-layer edge targets a lower-level vertex");
+                    }
+                }
+            }
+        }
+
+        std::vector<bool> visited(vertex_count, false);
+        std::vector<VertexType> pending;
+        pending.reserve(vertex_count);
+        pending.push_back(entry_point);
+        visited[static_cast<size_t>(entry_point)] = true;
+        for (size_t cursor = 0; cursor < pending.size(); ++cursor) {
+            const auto [neighbors, degree] = GetNeighbors(pending[cursor], 0);
+            for (VertexListSize index = 0; index < degree; ++index) {
+                const VertexType neighbor = neighbors[index];
+                if (!visited[static_cast<size_t>(neighbor)]) {
+                    visited[static_cast<size_t>(neighbor)] = true;
+                    pending.push_back(neighbor);
+                }
+            }
+        }
+        if (pending.size() != vertex_count) {
+            HnswStreamError("graph level-zero topology is disconnected from its entry point");
+        }
+    }
+
     std::pair<Inner &, size_t> GetInner(size_t vec_i) { return {inners_[vec_i >> chunk_shift_], vec_i & (chunk_size_ - 1)}; }
 
     std::pair<const Inner &, size_t> GetInner(size_t vec_i) const { return {inners_[vec_i >> chunk_shift_], vec_i & (chunk_size_ - 1)}; }
@@ -397,6 +637,7 @@ private:
     size_t chunk_shift_;
 
     std::atomic<size_t> cur_vec_num_;
+    std::atomic<size_t> built_vec_num_{0};
 
     std::unique_ptr<Inner[]> inners_;
     std::atomic<size_t> mem_usage_ = 0;
@@ -413,10 +654,7 @@ public:
             inners_[i].Check(chunk_size, this->graph_store_meta_, i * chunk_size_, cur_vec_num, max_l1);
             max_l = std::max(max_l, max_l1);
         }
-        auto [max_layer, ep] = this->GetEnterPoint();
-        if (max_l != max_layer) {
-            UnrecoverableError("max_l != max_layer");
-        }
+        Base::CheckGraphTopology(*this, cur_vec_num, max_l);
     }
 
     void Dump(std::ostream &os) const {
@@ -467,13 +705,17 @@ public:
     // }
     // ~DataStore() = default;
 
-    static This LoadFromPtr(const char *&ptr) {
-        size_t cur_vec_num = ReadBufAdv<size_t>(ptr);
-        VecStoreMeta vec_store_meta = VecStoreMeta::LoadFromPtr(ptr);
-        GraphStoreMeta graph_store_meta = GraphStoreMeta::LoadFromPtr(ptr);
+    static This LoadFromPtr(HnswPointerReader &reader) {
+        const size_t cur_vec_num = reader.Read<size_t>("vector count");
+        if (cur_vec_num > static_cast<size_t>(std::numeric_limits<VertexType>::max())) {
+            HnswPointerImageError("vector count exceeds the vertex representation");
+        }
+        VecStoreMeta vec_store_meta = VecStoreMeta::LoadFromPtr(reader);
+        GraphStoreMeta graph_store_meta = GraphStoreMeta::LoadFromPtr(reader);
+        Base::ValidatePointerImageEntryPoint(graph_store_meta, cur_vec_num);
 
         This ret = This(cur_vec_num, std::move(vec_store_meta), std::move(graph_store_meta));
-        ret.inner_ = Inner::LoadFromPtr(ptr, cur_vec_num, cur_vec_num, ret.vec_store_meta_, ret.graph_store_meta_);
+        ret.inner_ = Inner::LoadFromPtr(reader, cur_vec_num, cur_vec_num, ret.vec_store_meta_, ret.graph_store_meta_);
         return ret;
     }
 
@@ -485,11 +727,33 @@ public:
         return inner_.GetNeighbors(vertex_i, layer_i, this->graph_store_meta_);
     }
 
+    LayerSize GetLevel(VertexType vertex_i) const { return inner_.GetLevel(vertex_i, this->graph_store_meta_); }
+
+    bool IsVertexBuilt(VertexType vertex_i) const { return inner_.IsVertexBuilt(vertex_i, this->graph_store_meta_); }
+
+    bool AllVerticesBuilt() const {
+        if (this->Mmax0() == 0 && this->Mmax() == 0) {
+            return true;
+        }
+        for (VertexType vertex_i = 0; static_cast<size_t>(vertex_i) < cur_vec_num_; ++vertex_i) {
+            if (!IsVertexBuilt(vertex_i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void EnsureAllVerticesBuilt() const {
+        if (!AllVerticesBuilt()) {
+            throw std::logic_error("HNSW index contains stored but unbuilt vertices");
+        }
+    }
+
     LabelType GetLabel(size_t vec_i) const { return inner_.GetLabel(vec_i); }
 
     size_t cur_vec_num() const { return cur_vec_num_; }
 
-    size_t mem_usage() const { return 0; }
+    size_t mem_usage() const { return inner_.ExtraMemoryUsage(); }
 
 private:
     Inner inner_;
@@ -500,9 +764,9 @@ public:
         i32 max_l = -1;
         inner_.Check(cur_vec_num_, this->graph_store_meta_, 0, cur_vec_num_, max_l);
         auto [max_layer, ep] = this->GetEnterPoint();
-        if (max_l != max_layer) {
-            UnrecoverableError("max_l != max_layer");
-        }
+        static_cast<void>(max_layer);
+        static_cast<void>(ep);
+        Base::CheckGraphTopology(*this, cur_vec_num_, max_l);
     }
 
     void Dump() const {
@@ -516,6 +780,40 @@ public:
 
 #pragma clang diagnostic pop
 //----------------------------------------------- Inner -----------------------------------------------
+
+template <typename LabelType, bool OwnMem>
+class HnswLabelStore;
+
+template <typename LabelType>
+class HnswLabelStore<LabelType, true> {
+public:
+    HnswLabelStore() = default;
+    HnswLabelStore(std::unique_ptr<LabelType[]> labels) : labels_(std::move(labels)) {}
+
+    LabelType &operator[](size_t index) { return labels_[index]; }
+    const LabelType &operator[](size_t index) const { return labels_[index]; }
+    LabelType *get() const { return labels_.get(); }
+
+private:
+    std::unique_ptr<LabelType[]> labels_;
+};
+
+template <typename LabelType>
+class HnswLabelStore<LabelType, false> {
+public:
+    HnswLabelStore() = default;
+    HnswLabelStore(const char *labels) : labels_(labels) {}
+
+    LabelType operator[](size_t index) const noexcept {
+        static_assert(std::is_trivially_copyable_v<LabelType>);
+        LabelType label;
+        std::memcpy(&label, labels_ + index * sizeof(LabelType), sizeof(LabelType));
+        return label;
+    }
+
+private:
+    const char *labels_ = nullptr;
+};
 
 template <typename VecStoreT, typename LabelType, bool OwnMem>
 class DataStoreInnerBase {
@@ -582,17 +880,28 @@ public:
         return graph_store_inner_.GetNeighbors(vertex_i, layer_i, meta);
     }
 
+    LayerSize GetLevel(VertexType vertex_i, const GraphStoreMeta &meta) const { return graph_store_inner_.GetLevel(vertex_i, meta); }
+
+    bool IsVertexBuilt(VertexType vertex_i, const GraphStoreMeta &meta) const { return graph_store_inner_.IsVertexBuilt(vertex_i, meta); }
+
     LabelType GetLabel(VertexType vec_i) const { return labels_[vec_i]; }
 
     VecStoreInner *vec_store_inner() { return &vec_store_inner_; }
 
     GraphStoreInner *graph_store_inner() { return &graph_store_inner_; }
-    void SetGraphStoreInner(GraphStoreInner &&graph_store_inner) { graph_store_inner_ = std::move(graph_store_inner); }
+    void SetGraphStoreInner(GraphStoreInner &&graph_store_inner) noexcept { graph_store_inner_ = std::move(graph_store_inner); }
+    size_t ExtraMemoryUsage() const noexcept {
+        if constexpr (OwnMem) {
+            return 0;
+        } else {
+            return graph_store_inner_.ExtraMemoryUsage();
+        }
+    }
 
 protected:
     VecStoreInner vec_store_inner_;
     GraphStoreInner graph_store_inner_;
-    ArrayPtr<LabelType, OwnMem> labels_;
+    HnswLabelStore<LabelType, OwnMem> labels_;
 
 public:
     void Check(size_t chunk_size, const GraphStoreMeta &meta, VertexType vertex_i_offset, size_t cur_vec_num, i32 &max_l) const {
@@ -624,7 +933,7 @@ private:
         this->vec_store_inner_ = std::move(vec_store_inner);
         this->graph_store_inner_ = std::move(graph_store_inner);
         this->labels_ = std::make_unique<LabelType[]>(chunk_size);
-        vertex_mutex_ = std::make_unique<std::shared_mutex[]>(chunk_size);
+        vertex_mutex_ = std::make_unique<HnswVertexMutex[]>(chunk_size);
     }
 
 public:
@@ -632,6 +941,7 @@ public:
     static This Make(size_t chunk_size, VecStoreMeta &vec_store_meta, GraphStoreMeta &graph_store_meta, size_t &mem_usage) {
         auto vec_store_inner = VecStoreInner::Make(chunk_size, vec_store_meta, mem_usage);
         auto graph_store_inner = GraphStoreInner::Make(chunk_size, graph_store_meta, mem_usage);
+        mem_usage = HnswCheckedAdd(mem_usage, OwnedCapacityMemoryUsage(chunk_size), "HNSW owned inner memory");
         return This(chunk_size, std::move(vec_store_inner), std::move(graph_store_inner));
     }
 
@@ -640,25 +950,32 @@ public:
                      size_t chunk_size,
                      VecStoreMeta &vec_store_meta,
                      GraphStoreMeta &graph_store_meta,
-                     size_t &mem_usage) {
+                     size_t &mem_usage,
+                     size_t vertex_offset = 0,
+                     size_t total_vertex_n = std::numeric_limits<size_t>::max()) {
         auto vec_store_inner = VecStoreInner::Load(file_handle, cur_vec_num, chunk_size, vec_store_meta, mem_usage);
-        auto graph_store_iner = GraphStoreInner::Load(file_handle, cur_vec_num, chunk_size, graph_store_meta, mem_usage);
+        auto graph_store_iner =
+            GraphStoreInner::Load(file_handle, cur_vec_num, chunk_size, graph_store_meta, mem_usage, vertex_offset, total_vertex_n);
+        mem_usage =
+            HnswStreamCheckedAdd(mem_usage, StreamOwnedCapacityMemoryUsage(chunk_size), "HNSW owned inner memory");
         This ret(chunk_size, std::move(vec_store_inner), std::move(graph_store_iner));
-        file_handle.Read(ret.labels_.get(), sizeof(LabelType) * cur_vec_num);
+        const size_t labels_size = HnswStreamCheckedMultiply(sizeof(LabelType), cur_vec_num, "HNSW labels");
+        HnswReadExact(file_handle, ret.labels_.get(), labels_size, "HNSW labels");
         return ret;
     }
 
-    static This LoadFromPtr(const char *&ptr,
+    static This LoadFromPtr(HnswPointerReader &reader,
                             size_t cur_vec_num,
                             size_t chunk_size,
                             VecStoreMeta &vec_store_meta,
                             GraphStoreMeta &graph_store_meta,
                             size_t &mem_usage) {
-        auto vec_store_inner = VecStoreInner::LoadFromPtr(ptr, cur_vec_num, chunk_size, vec_store_meta, mem_usage);
-        auto graph_store_inner = GraphStoreInner::LoadFromPtr(ptr, cur_vec_num, chunk_size, graph_store_meta, mem_usage);
+        auto vec_store_inner = VecStoreInner::LoadFromPtr(reader, cur_vec_num, chunk_size, vec_store_meta, mem_usage);
+        auto graph_store_inner = GraphStoreInner::LoadFromPtr(reader, cur_vec_num, chunk_size, graph_store_meta, mem_usage);
+        mem_usage = HnswCheckedAdd(mem_usage, OwnedCapacityMemoryUsage(chunk_size), "HNSW owned inner memory");
         This ret(chunk_size, std::move(vec_store_inner), std::move(graph_store_inner));
-        std::memcpy(ret.labels_.get(), ptr, sizeof(LabelType) * cur_vec_num);
-        ptr += sizeof(LabelType) * cur_vec_num;
+        const size_t labels_size = HnswCheckedMultiply(sizeof(LabelType), cur_vec_num, "HNSW labels");
+        reader.CopyTo(ret.labels_.get(), labels_size, "HNSW labels");
         return ret;
     }
 
@@ -689,12 +1006,25 @@ public:
         return this->graph_store_inner_.GetNeighborsMut(vertex_i, layer_i, meta);
     }
 
-    std::shared_lock<std::shared_mutex> SharedLock(VertexType vec_i) const { return std::shared_lock<std::shared_mutex>(vertex_mutex_[vec_i]); }
+    HnswVertexSharedLock SharedLock(VertexType vec_i) const { return HnswVertexSharedLock(vertex_mutex_[vec_i]); }
 
-    std::unique_lock<std::shared_mutex> UniqueLock(VertexType vec_i) { return std::unique_lock<std::shared_mutex>(vertex_mutex_[vec_i]); }
+    HnswVertexUniqueLock UniqueLock(VertexType vec_i) { return HnswVertexUniqueLock(vertex_mutex_[vec_i]); }
 
 private:
-    mutable std::unique_ptr<std::shared_mutex[]> vertex_mutex_;
+    static size_t OwnedCapacityMemoryUsage(size_t chunk_size) {
+        const size_t labels = HnswCheckedMultiply(chunk_size, sizeof(LabelType), "HNSW label capacity");
+        const size_t vertex_mutexes = HnswCheckedMultiply(chunk_size, sizeof(HnswVertexMutex), "HNSW vertex mutex capacity");
+        return HnswCheckedAdd(labels, vertex_mutexes, "HNSW owned inner capacity");
+    }
+
+    static size_t StreamOwnedCapacityMemoryUsage(size_t chunk_size) {
+        const size_t labels = HnswStreamCheckedMultiply(chunk_size, sizeof(LabelType), "HNSW label capacity");
+        const size_t vertex_mutexes =
+            HnswStreamCheckedMultiply(chunk_size, sizeof(HnswVertexMutex), "HNSW vertex mutex capacity");
+        return HnswStreamCheckedAdd(labels, vertex_mutexes, "HNSW owned inner capacity");
+    }
+
+    mutable std::unique_ptr<HnswVertexMutex[]> vertex_mutex_;
 };
 
 template <typename VecStoreT, typename LabelType>
@@ -706,7 +1036,7 @@ public:
     using GraphStoreInner = GraphStoreInner<false>;
 
 private:
-    DataStoreInner(size_t chunk_size, VecStoreInner vec_store_inner, GraphStoreInner graph_store_inner, const LabelType *labels) {
+    DataStoreInner(size_t chunk_size, VecStoreInner vec_store_inner, GraphStoreInner graph_store_inner, const char *labels) {
         this->vec_store_inner_ = std::move(vec_store_inner);
         this->graph_store_inner_ = std::move(graph_store_inner);
         this->labels_ = labels;
@@ -715,12 +1045,15 @@ private:
 public:
     DataStoreInner() = default;
 
-    static This
-    LoadFromPtr(const char *&ptr, size_t cur_vec_num, size_t chunk_size, VecStoreMeta &vec_store_meta, const GraphStoreMeta &graph_store_meta) {
-        auto vec_store_inner = VecStoreInner::LoadFromPtr(ptr, cur_vec_num, vec_store_meta);
-        auto graph_store_inner = GraphStoreInner::LoadFromPtr(ptr, cur_vec_num, chunk_size, graph_store_meta);
-        auto *labels = reinterpret_cast<const LabelType *>(ptr);
-        ptr += sizeof(LabelType) * cur_vec_num;
+    static This LoadFromPtr(HnswPointerReader &reader,
+                            size_t cur_vec_num,
+                            size_t chunk_size,
+                            VecStoreMeta &vec_store_meta,
+                            const GraphStoreMeta &graph_store_meta) {
+        auto vec_store_inner = VecStoreInner::LoadFromPtr(reader, cur_vec_num, vec_store_meta);
+        auto graph_store_inner = GraphStoreInner::LoadFromPtr(reader, cur_vec_num, chunk_size, graph_store_meta);
+        const size_t labels_size = HnswCheckedMultiply(sizeof(LabelType), cur_vec_num, "HNSW labels");
+        const char *labels = reader.ReadBytes(labels_size, "HNSW labels");
         return This(chunk_size, std::move(vec_store_inner), std::move(graph_store_inner), labels);
     }
 };
@@ -822,18 +1155,38 @@ DataStore<CompressVecStoreType, LabelType, OwnMem> DataStore<VecStoreT, LabelTyp
         return std::move(*this);
     } else {
         const auto [chunk_num, last_chunk_size] = this->ChunkInfo(this->cur_vec_num());
-        std::vector<GraphStoreInner<OwnMem>> graph_inners;
-        for (size_t i = 0; i < chunk_num; ++i) {
-            graph_inners.emplace_back(std::move(*this->inners_[i].graph_store_inner()));
-        }
+        static_cast<void>(last_chunk_size);
+        const size_t built_vec_num = this->built_vec_num();
         auto ret = DataStore<CompressVecStoreType, LabelType, OwnMem>::Make(this->chunk_size_,
                                                                             this->max_chunk_n_,
                                                                             this->vec_store_meta_.dim(),
                                                                             this->Mmax0(),
                                                                             this->Mmax());
         ret.OptAddVec(DataStoreIter<VecStoreT, LabelType>(this));
-        ret.SetGraph(std::move(this->graph_store_meta_), std::move(graph_inners));
+        if (ret.cur_vec_num() != this->cur_vec_num()) {
+            throw std::logic_error("HNSW LVQ compression did not preserve the vector count");
+        }
+        ret.ValidateGraphAttachment(chunk_num, built_vec_num);
+
+        size_t upper_layer_mem_usage = 0;
+        for (size_t i = 0; i < chunk_num; ++i) {
+            const size_t current_chunk_size = i + 1 < chunk_num ? this->chunk_size_ : last_chunk_size;
+            upper_layer_mem_usage =
+                HnswCheckedAdd(upper_layer_mem_usage,
+                               this->inners_[i].graph_store_inner()->UpperLayerMemUsage(current_chunk_size, this->graph_store_meta_),
+                               "HNSW transferred upper-layer memory");
+        }
+        std::vector<GraphStoreInner<OwnMem>> graph_inners;
+        graph_inners.reserve(chunk_num);
+        static_assert(std::is_nothrow_move_constructible_v<GraphStoreInner<OwnMem>>);
+        for (size_t i = 0; i < chunk_num; ++i) {
+            graph_inners.emplace_back(std::move(*this->inners_[i].graph_store_inner()));
+        }
+        ret.SetGraph(std::move(this->graph_store_meta_), std::move(graph_inners), built_vec_num, upper_layer_mem_usage);
         this->inners_ = nullptr;
+        this->cur_vec_num_.store(0, std::memory_order_release);
+        this->built_vec_num_.store(0, std::memory_order_release);
+        this->mem_usage_.store(0, std::memory_order_release);
         return ret;
     }
 }
@@ -845,18 +1198,38 @@ DataStore<CompressVecStoreType, LabelType, OwnMem> DataStore<VecStoreT, LabelTyp
         return std::move(*this);
     } else {
         const auto [chunk_num, last_chunk_size] = this->ChunkInfo(this->cur_vec_num());
-        std::vector<GraphStoreInner<OwnMem>> graph_inners;
-        for (size_t i = 0; i < chunk_num; ++i) {
-            graph_inners.emplace_back(std::move(*this->inners_[i].graph_store_inner()));
-        }
+        static_cast<void>(last_chunk_size);
+        const size_t built_vec_num = this->built_vec_num();
         auto ret = DataStore<CompressVecStoreType, LabelType, OwnMem>::Make(this->chunk_size_,
                                                                             this->max_chunk_n_,
                                                                             this->vec_store_meta_.dim(),
                                                                             this->Mmax0(),
                                                                             this->Mmax());
         ret.OptAddVec(DataStoreIter<VecStoreT, LabelType>(this));
-        ret.SetGraph(std::move(this->graph_store_meta_), std::move(graph_inners));
+        if (ret.cur_vec_num() != this->cur_vec_num()) {
+            throw std::logic_error("HNSW Rabitq compression did not preserve the vector count");
+        }
+        ret.ValidateGraphAttachment(chunk_num, built_vec_num);
+
+        size_t upper_layer_mem_usage = 0;
+        for (size_t i = 0; i < chunk_num; ++i) {
+            const size_t current_chunk_size = i + 1 < chunk_num ? this->chunk_size_ : last_chunk_size;
+            upper_layer_mem_usage =
+                HnswCheckedAdd(upper_layer_mem_usage,
+                               this->inners_[i].graph_store_inner()->UpperLayerMemUsage(current_chunk_size, this->graph_store_meta_),
+                               "HNSW transferred upper-layer memory");
+        }
+        std::vector<GraphStoreInner<OwnMem>> graph_inners;
+        graph_inners.reserve(chunk_num);
+        static_assert(std::is_nothrow_move_constructible_v<GraphStoreInner<OwnMem>>);
+        for (size_t i = 0; i < chunk_num; ++i) {
+            graph_inners.emplace_back(std::move(*this->inners_[i].graph_store_inner()));
+        }
+        ret.SetGraph(std::move(this->graph_store_meta_), std::move(graph_inners), built_vec_num, upper_layer_mem_usage);
         this->inners_ = nullptr;
+        this->cur_vec_num_.store(0, std::memory_order_release);
+        this->built_vec_num_.store(0, std::memory_order_release);
+        this->mem_usage_.store(0, std::memory_order_release);
         return ret;
     }
 }

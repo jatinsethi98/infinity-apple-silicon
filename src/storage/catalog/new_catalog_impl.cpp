@@ -135,18 +135,46 @@ Status NewCatalog::DropBlockLockByBlockKey(const std::string &block_key) {
 }
 
 std::shared_ptr<MemIndex> NewCatalog::GetMemIndex(const std::string &mem_index_key, bool for_update) {
-    std::shared_ptr<MemIndex> mem_index = nullptr;
+    for (;;) {
+        std::shared_ptr<MemIndex> mem_index;
+        {
+            std::unique_lock<std::shared_mutex> lck(mem_index_mtx_);
+            if (auto iter = mem_index_map_.find(mem_index_key); iter != mem_index_map_.end()) {
+                mem_index = iter->second;
+            } else {
+                mem_index = std::make_shared<MemIndex>();
+                mem_index_map_.emplace(mem_index_key, mem_index);
+            }
+            if (!for_update || mem_index->TryUpdateBegin()) {
+                return mem_index;
+            }
+        }
+        mem_index->WaitUntilUpdateAllowed();
+    }
+}
+
+std::shared_ptr<MemIndex> NewCatalog::TryReserveMemIndexForDump(const std::string &mem_index_key,
+                                                                const std::shared_ptr<MemIndex> &expected_mem_index) {
     std::unique_lock<std::shared_mutex> lck(mem_index_mtx_);
-    if (auto iter = mem_index_map_.find(mem_index_key); iter != mem_index_map_.end()) {
-        mem_index = iter->second;
-    } else {
-        mem_index = std::make_shared<MemIndex>();
-        mem_index_map_.emplace(mem_index_key, mem_index);
+    auto iter = mem_index_map_.find(mem_index_key);
+    if (iter == mem_index_map_.end() || (expected_mem_index != nullptr && iter->second != expected_mem_index)) {
+        return nullptr;
     }
-    if (for_update) {
-        mem_index->UpdateBegin();
+    std::shared_ptr<MemIndex> mem_index = iter->second;
+    return mem_index->TrySetIsDumping() ? std::move(mem_index) : nullptr;
+}
+
+bool NewCatalog::PopReservedMemIndex(const std::string &mem_index_key, const std::shared_ptr<MemIndex> &expected_mem_index) {
+    if (expected_mem_index == nullptr) {
+        return false;
     }
-    return mem_index;
+    std::unique_lock<std::shared_mutex> lck(mem_index_mtx_);
+    auto iter = mem_index_map_.find(mem_index_key);
+    if (iter == mem_index_map_.end() || iter->second != expected_mem_index || !expected_mem_index->IsDumping()) {
+        return false;
+    }
+    mem_index_map_.erase(iter);
+    return true;
 }
 
 std::shared_ptr<MemIndex> NewCatalog::PopMemIndex(const std::string &mem_index_key) {

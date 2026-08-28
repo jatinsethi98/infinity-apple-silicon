@@ -1,8 +1,11 @@
 #ifndef GTEST_EXPAND_H
 #define GTEST_EXPAND_H
 
+#if defined(__APPLE__)
+#include "gtest/gtest.h"
 import std.compat;
-
+#else
+import std.compat;
 #define _GLIBCXX_MEMORY 1
 #define _GLIBCXX_OSTREAM 1
 #define _GLIBCXX_SET 1
@@ -27,6 +30,7 @@ import std.compat;
 #define _GLIBCXX_FILESYSTEM 1
 
 #include "gtest/gtest.h"
+#endif
 
 #define EXPECT_THROW_WITHOUT_STACKTRACE(statement, expected_exception)                                                                               \
     SetPrintStacktrace(false);                                                                                                                       \

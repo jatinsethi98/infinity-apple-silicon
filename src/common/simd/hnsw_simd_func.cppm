@@ -1040,6 +1040,44 @@ export float F32L2SSE(const float *pv1, const float *pv2, size_t dim) {
     const float *pEnd1 = pv1 + (dim16 << 4);
 
     __m128 diff, v1, v2;
+#if defined(__APPLE__) && defined(__aarch64__)
+    __m128 sum0 = _mm_set1_ps(0);
+    __m128 sum1 = _mm_set1_ps(0);
+    __m128 sum2 = _mm_set1_ps(0);
+    __m128 sum3 = _mm_set1_ps(0);
+
+    while (pv1 < pEnd1) {
+        v1 = _mm_loadu_ps(pv1);
+        pv1 += 4;
+        v2 = _mm_loadu_ps(pv2);
+        pv2 += 4;
+        diff = _mm_sub_ps(v1, v2);
+        sum0 = _mm_add_ps(sum0, _mm_mul_ps(diff, diff));
+
+        v1 = _mm_loadu_ps(pv1);
+        pv1 += 4;
+        v2 = _mm_loadu_ps(pv2);
+        pv2 += 4;
+        diff = _mm_sub_ps(v1, v2);
+        sum1 = _mm_add_ps(sum1, _mm_mul_ps(diff, diff));
+
+        v1 = _mm_loadu_ps(pv1);
+        pv1 += 4;
+        v2 = _mm_loadu_ps(pv2);
+        pv2 += 4;
+        diff = _mm_sub_ps(v1, v2);
+        sum2 = _mm_add_ps(sum2, _mm_mul_ps(diff, diff));
+
+        v1 = _mm_loadu_ps(pv1);
+        pv1 += 4;
+        v2 = _mm_loadu_ps(pv2);
+        pv2 += 4;
+        diff = _mm_sub_ps(v1, v2);
+        sum3 = _mm_add_ps(sum3, _mm_mul_ps(diff, diff));
+    }
+
+    const __m128 sum = _mm_add_ps(_mm_add_ps(sum0, sum1), _mm_add_ps(sum2, sum3));
+#else
     __m128 sum = _mm_set1_ps(0);
 
     while (pv1 < pEnd1) {
@@ -1071,6 +1109,7 @@ export float F32L2SSE(const float *pv1, const float *pv2, size_t dim) {
         diff = _mm_sub_ps(v1, v2);
         sum = _mm_add_ps(sum, _mm_mul_ps(diff, diff));
     }
+#endif
 
     _mm_store_ps(TmpRes, sum);
     return TmpRes[0] + TmpRes[1] + TmpRes[2] + TmpRes[3];
@@ -1079,6 +1118,245 @@ export float F32L2SSE(const float *pv1, const float *pv2, size_t dim) {
 export float F32L2SSEResidual(const float *pv1, const float *pv2, size_t dim) {
     return F32L2SSE(pv1, pv2, dim) + F32L2BF(pv1 + (dim & ~15), pv2 + (dim & ~15), dim & 15);
 }
+
+#if defined(__APPLE__) && defined(__aarch64__)
+export void F32L2SSEBatch4(const float *query,
+                          const float *candidate0,
+                          const float *candidate1,
+                          const float *candidate2,
+                          const float *candidate3,
+                          size_t dim,
+                          float *distances) {
+    alignas(16) float tmp[4];
+    const float *query_end = query + ((dim >> 4) << 4);
+
+    __m128 sum00 = _mm_set1_ps(0);
+    __m128 sum01 = _mm_set1_ps(0);
+    __m128 sum02 = _mm_set1_ps(0);
+    __m128 sum03 = _mm_set1_ps(0);
+    __m128 sum10 = _mm_set1_ps(0);
+    __m128 sum11 = _mm_set1_ps(0);
+    __m128 sum12 = _mm_set1_ps(0);
+    __m128 sum13 = _mm_set1_ps(0);
+    __m128 sum20 = _mm_set1_ps(0);
+    __m128 sum21 = _mm_set1_ps(0);
+    __m128 sum22 = _mm_set1_ps(0);
+    __m128 sum23 = _mm_set1_ps(0);
+    __m128 sum30 = _mm_set1_ps(0);
+    __m128 sum31 = _mm_set1_ps(0);
+    __m128 sum32 = _mm_set1_ps(0);
+    __m128 sum33 = _mm_set1_ps(0);
+
+    while (query < query_end) {
+        __m128 query_vector = _mm_loadu_ps(query);
+        query += 4;
+        __m128 diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate0));
+        candidate0 += 4;
+        sum00 = _mm_add_ps(sum00, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate1));
+        candidate1 += 4;
+        sum10 = _mm_add_ps(sum10, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate2));
+        candidate2 += 4;
+        sum20 = _mm_add_ps(sum20, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate3));
+        candidate3 += 4;
+        sum30 = _mm_add_ps(sum30, _mm_mul_ps(diff, diff));
+
+        query_vector = _mm_loadu_ps(query);
+        query += 4;
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate0));
+        candidate0 += 4;
+        sum01 = _mm_add_ps(sum01, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate1));
+        candidate1 += 4;
+        sum11 = _mm_add_ps(sum11, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate2));
+        candidate2 += 4;
+        sum21 = _mm_add_ps(sum21, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate3));
+        candidate3 += 4;
+        sum31 = _mm_add_ps(sum31, _mm_mul_ps(diff, diff));
+
+        query_vector = _mm_loadu_ps(query);
+        query += 4;
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate0));
+        candidate0 += 4;
+        sum02 = _mm_add_ps(sum02, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate1));
+        candidate1 += 4;
+        sum12 = _mm_add_ps(sum12, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate2));
+        candidate2 += 4;
+        sum22 = _mm_add_ps(sum22, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate3));
+        candidate3 += 4;
+        sum32 = _mm_add_ps(sum32, _mm_mul_ps(diff, diff));
+
+        query_vector = _mm_loadu_ps(query);
+        query += 4;
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate0));
+        candidate0 += 4;
+        sum03 = _mm_add_ps(sum03, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate1));
+        candidate1 += 4;
+        sum13 = _mm_add_ps(sum13, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate2));
+        candidate2 += 4;
+        sum23 = _mm_add_ps(sum23, _mm_mul_ps(diff, diff));
+        diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate3));
+        candidate3 += 4;
+        sum33 = _mm_add_ps(sum33, _mm_mul_ps(diff, diff));
+    }
+
+    const __m128 sum0 = _mm_add_ps(_mm_add_ps(sum00, sum01), _mm_add_ps(sum02, sum03));
+    const __m128 sum1 = _mm_add_ps(_mm_add_ps(sum10, sum11), _mm_add_ps(sum12, sum13));
+    const __m128 sum2 = _mm_add_ps(_mm_add_ps(sum20, sum21), _mm_add_ps(sum22, sum23));
+    const __m128 sum3 = _mm_add_ps(_mm_add_ps(sum30, sum31), _mm_add_ps(sum32, sum33));
+
+    _mm_store_ps(tmp, sum0);
+    distances[0] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+    _mm_store_ps(tmp, sum1);
+    distances[1] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+    _mm_store_ps(tmp, sum2);
+    distances[2] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+    _mm_store_ps(tmp, sum3);
+    distances[3] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+}
+
+export void F32L2SSEResidualBatch4(const float *query,
+                                  const float *candidate0,
+                                  const float *candidate1,
+                                  const float *candidate2,
+                                  const float *candidate3,
+                                  size_t dim,
+                                  float *distances) {
+    const size_t aligned_dim = dim & ~size_t{15};
+    F32L2SSEBatch4(query, candidate0, candidate1, candidate2, candidate3, aligned_dim, distances);
+    const size_t residual_dim = dim & 15;
+    distances[0] += F32L2BF(query + aligned_dim, candidate0 + aligned_dim, residual_dim);
+    distances[1] += F32L2BF(query + aligned_dim, candidate1 + aligned_dim, residual_dim);
+    distances[2] += F32L2BF(query + aligned_dim, candidate2 + aligned_dim, residual_dim);
+    distances[3] += F32L2BF(query + aligned_dim, candidate3 + aligned_dim, residual_dim);
+}
+
+namespace {
+
+constexpr std::uint8_t kF32L2Batch4AllLanes = 0x0f;
+constexpr size_t kF32L2Batch4CheckpointComponents = 32;
+
+struct F32L2Batch4Accumulators {
+    __m128 sum0 = _mm_set1_ps(0);
+    __m128 sum1 = _mm_set1_ps(0);
+    __m128 sum2 = _mm_set1_ps(0);
+    __m128 sum3 = _mm_set1_ps(0);
+};
+
+float ReduceF32L2Batch4Accumulators(const F32L2Batch4Accumulators &sums) {
+    alignas(16) float values[4];
+    const __m128 sum = _mm_add_ps(_mm_add_ps(sums.sum0, sums.sum1), _mm_add_ps(sums.sum2, sums.sum3));
+    _mm_store_ps(values, sum);
+    return values[0] + values[1] + values[2] + values[3];
+}
+
+std::uint8_t F32L2SSEBatch4WithinThresholdAligned(const float *query,
+                                                  const std::array<const float *, 4> &candidates,
+                                                  size_t aligned_dim,
+                                                  size_t total_dim,
+                                                  float threshold,
+                                                  float *distances) {
+    std::array<F32L2Batch4Accumulators, 4> sums;
+    std::uint8_t exact_mask = kF32L2Batch4AllLanes;
+
+    for (size_t component = 0; component < aligned_dim; component += 16) {
+        const __m128 query0 = _mm_loadu_ps(query + component);
+        const __m128 query1 = _mm_loadu_ps(query + component + 4);
+        const __m128 query2 = _mm_loadu_ps(query + component + 8);
+        const __m128 query3 = _mm_loadu_ps(query + component + 12);
+
+        auto consume_lane = [&](size_t lane, std::uint8_t bit) {
+            if ((exact_mask & bit) == 0) {
+                return;
+            }
+            const float *candidate = candidates[lane] + component;
+            __m128 diff = _mm_sub_ps(query0, _mm_loadu_ps(candidate));
+            sums[lane].sum0 = _mm_add_ps(sums[lane].sum0, _mm_mul_ps(diff, diff));
+            diff = _mm_sub_ps(query1, _mm_loadu_ps(candidate + 4));
+            sums[lane].sum1 = _mm_add_ps(sums[lane].sum1, _mm_mul_ps(diff, diff));
+            diff = _mm_sub_ps(query2, _mm_loadu_ps(candidate + 8));
+            sums[lane].sum2 = _mm_add_ps(sums[lane].sum2, _mm_mul_ps(diff, diff));
+            diff = _mm_sub_ps(query3, _mm_loadu_ps(candidate + 12));
+            sums[lane].sum3 = _mm_add_ps(sums[lane].sum3, _mm_mul_ps(diff, diff));
+        };
+        consume_lane(0, 0x01);
+        consume_lane(1, 0x02);
+        consume_lane(2, 0x04);
+        consume_lane(3, 0x08);
+
+        const size_t completed = component + 16;
+        if (completed < total_dim && completed % kF32L2Batch4CheckpointComponents == 0) {
+            for (size_t lane = 0; lane < candidates.size(); ++lane) {
+                const std::uint8_t bit = static_cast<std::uint8_t>(std::uint8_t{1} << lane);
+                if ((exact_mask & bit) != 0 && ReduceF32L2Batch4Accumulators(sums[lane]) > threshold) {
+                    exact_mask &= static_cast<std::uint8_t>(~bit);
+                }
+            }
+            if (exact_mask == 0) {
+                return 0;
+            }
+        }
+    }
+
+    for (size_t lane = 0; lane < candidates.size(); ++lane) {
+        const std::uint8_t bit = static_cast<std::uint8_t>(std::uint8_t{1} << lane);
+        if ((exact_mask & bit) != 0) {
+            distances[lane] = ReduceF32L2Batch4Accumulators(sums[lane]);
+        }
+    }
+    return exact_mask;
+}
+
+} // namespace
+
+export std::uint8_t F32L2SSEBatch4WithinThreshold(const float *query,
+                                                  const float *candidate0,
+                                                  const float *candidate1,
+                                                  const float *candidate2,
+                                                  const float *candidate3,
+                                                  size_t dim,
+                                                  float threshold,
+                                                  float *distances) {
+    const std::array<const float *, 4> candidates{candidate0, candidate1, candidate2, candidate3};
+    return F32L2SSEBatch4WithinThresholdAligned(query, candidates, dim, dim, threshold, distances);
+}
+
+export std::uint8_t F32L2SSEResidualBatch4WithinThreshold(const float *query,
+                                                          const float *candidate0,
+                                                          const float *candidate1,
+                                                          const float *candidate2,
+                                                          const float *candidate3,
+                                                          size_t dim,
+                                                          float threshold,
+                                                          float *distances) {
+    const std::array<const float *, 4> candidates{candidate0, candidate1, candidate2, candidate3};
+    const size_t aligned_dim = dim & ~size_t{15};
+    const std::uint8_t exact_mask = F32L2SSEBatch4WithinThresholdAligned(query, candidates, aligned_dim, dim, threshold, distances);
+    const size_t residual_dim = dim & 15;
+    if ((exact_mask & std::uint8_t{0x01}) != 0) {
+        distances[0] += F32L2BF(query + aligned_dim, candidate0 + aligned_dim, residual_dim);
+    }
+    if ((exact_mask & std::uint8_t{0x02}) != 0) {
+        distances[1] += F32L2BF(query + aligned_dim, candidate1 + aligned_dim, residual_dim);
+    }
+    if ((exact_mask & std::uint8_t{0x04}) != 0) {
+        distances[2] += F32L2BF(query + aligned_dim, candidate2 + aligned_dim, residual_dim);
+    }
+    if ((exact_mask & std::uint8_t{0x08}) != 0) {
+        distances[3] += F32L2BF(query + aligned_dim, candidate3 + aligned_dim, residual_dim);
+    }
+    return exact_mask;
+}
+#endif
 
 #endif
 

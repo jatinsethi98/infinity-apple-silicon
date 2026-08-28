@@ -86,7 +86,7 @@ F32DistanceFuncType Get_HNSW_F32L2_16_ptr() {
         return &F32L2AVX;
     }
 #endif
-#if defined(__SSE2__)
+#if defined(__SSE2__) || (defined(__APPLE__) && defined(__aarch64__))
     if (IsSSE2Supported()) {
         return &F32L2SSE;
     }
@@ -105,13 +105,43 @@ F32DistanceFuncType Get_HNSW_F32L2_ptr() {
         return &F32L2AVXResidual;
     }
 #endif
-#if defined(__SSE2__)
+#if defined(__SSE2__) || (defined(__APPLE__) && defined(__aarch64__))
     if (IsSSE2Supported()) {
         return &F32L2SSEResidual;
     }
 #endif
     return &F32L2BF;
 }
+
+#if defined(__APPLE__) && defined(__aarch64__)
+F32DistanceBatch4FuncType Get_HNSW_F32L2_BATCH4_16_ptr() {
+    if (IsSSE2Supported()) {
+        return &F32L2SSEBatch4;
+    }
+    return nullptr;
+}
+
+F32DistanceBatch4FuncType Get_HNSW_F32L2_BATCH4_ptr() {
+    if (IsSSE2Supported()) {
+        return &F32L2SSEResidualBatch4;
+    }
+    return nullptr;
+}
+
+F32DistanceBatch4ThresholdFuncType Get_HNSW_F32L2_BATCH4_THRESHOLD_16_ptr() {
+    if (IsSSE2Supported()) {
+        return &F32L2SSEBatch4WithinThreshold;
+    }
+    return nullptr;
+}
+
+F32DistanceBatch4ThresholdFuncType Get_HNSW_F32L2_BATCH4_THRESHOLD_ptr() {
+    if (IsSSE2Supported()) {
+        return &F32L2SSEResidualBatch4WithinThreshold;
+    }
+    return nullptr;
+}
+#endif
 
 F32DistanceFuncType Get_HNSW_F32IP_16_ptr() {
 #if defined(__AVX512F__)

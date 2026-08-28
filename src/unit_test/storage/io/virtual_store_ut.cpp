@@ -398,7 +398,7 @@ TEST_F(VirtualStoreTest, TestStorageType) {
 }
 
 TEST_F(VirtualStoreTest, TestFileCompress) {
-    std::string file_path("/var/infinity/tmp/test_compress.txt");
+    std::string file_path = std::string(GetFullTmpDir()) + "/test_compress.txt";
 
     {
         std::ofstream file(file_path);

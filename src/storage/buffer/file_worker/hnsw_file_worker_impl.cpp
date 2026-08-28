@@ -97,7 +97,11 @@ bool HnswFileWorker::WriteToFileImpl(bool to_spill, bool &prepare_success, const
         UnrecoverableError("WriteToFileImpl: Data is not allocated.");
     }
     auto *hnsw_handler = reinterpret_cast<HnswHandlerPtr *>(data_);
-    (*hnsw_handler)->SaveToPtr(*file_handle_);
+    if (to_spill) {
+        (*hnsw_handler)->Save(*file_handle_);
+    } else {
+        (*hnsw_handler)->SaveToPtr(*file_handle_);
+    }
     prepare_success = true;
     return true;
 }
