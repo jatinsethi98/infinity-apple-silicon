@@ -33,11 +33,7 @@ import serialize;
 
 namespace infinity {
 
-#if defined(__APPLE__) && defined(__aarch64__) && defined(INFINITY_ENABLE_APPLE_HNSW_COMPACT_VERTEX_LOCKS)
-export using HnswVertexMutex = SpinLock;
-#else
 export using HnswVertexMutex = std::shared_mutex;
-#endif
 export using HnswVertexSharedLock = std::shared_lock<HnswVertexMutex>;
 export using HnswVertexUniqueLock = std::unique_lock<HnswVertexMutex>;
 

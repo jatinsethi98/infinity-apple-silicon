@@ -27,9 +27,6 @@ import :default_values;
 import :utility;
 import :hnsw_lsg_builder;
 import :index_hnsw;
-#if defined(INFINITY_ENABLE_HNSW_LVQ_CAPTURE)
-import :hnsw_lvq_capture;
-#endif
 
 import std;
 import third_party;
@@ -49,13 +46,6 @@ namespace infinity {
 
 struct HnswCompressionTargetTag {};
 
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-template <typename VecStoreType, typename = void>
-struct HnswPlainDenseVecStore : std::false_type {};
-
-template <typename VecStoreType>
-struct HnswPlainDenseVecStore<VecStoreType, std::void_t<decltype(VecStoreType::IsPlainDense)>> : std::bool_constant<VecStoreType::IsPlainDense> {};
-#endif
 
 export struct KnnSearchOption {
     size_t ef_ = 0;
@@ -102,67 +92,9 @@ public:
 
     constexpr static bool LSG = IsLSGDistance<Distance>;
 
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    struct IncrementalReciprocalSelectionMetadata {
-        bool heuristic_branch{};
-        bool used_batch4{};
-        bool finite_strict_order{};
-        bool full{};
-        std::uint64_t pair_distance_evaluations{};
-    };
 
-    static constexpr size_t kIncrementalReciprocalScratchCapacity = kHnswIncrementalReciprocalScratchCapacity;
-    static constexpr size_t kIncrementalReciprocalCertificateLayerCount = std::numeric_limits<std::uint64_t>::digits;
-    static constexpr bool kIncrementalReciprocalSupported = OwnMem && !LSG && HnswPlainDenseVecStore<VecStoreType>::value;
-#endif
 
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-    static constexpr std::uint32_t kIncrementalReciprocalEvidenceArmed = 1U << 0U;
-    static constexpr std::uint32_t kIncrementalReciprocalEvidenceEligible = 1U << 1U;
-    static constexpr std::uint32_t kIncrementalReciprocalEvidenceUnchanged = 1U << 2U;
-    static constexpr std::uint32_t kIncrementalReciprocalEvidenceUpdated = 1U << 3U;
-    static constexpr std::uint32_t kIncrementalReciprocalEvidenceSealed = 1U << 31U;
-#endif
 
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-    static constexpr bool kThresholdBatch4ExecutionEvidenceSupported = OwnMem && FourCandidateThresholdDistance<Distance, DataStore>;
-    static constexpr std::uint32_t kThresholdBatch4EvidenceArmed = 1U << 0U;
-    static constexpr std::uint32_t kThresholdBatch4EvidenceEligible = 1U << 1U;
-    static constexpr std::uint32_t kThresholdBatch4EvidenceRejected = 1U << 2U;
-    static constexpr std::uint32_t kThresholdBatch4EvidenceSurviving = 1U << 3U;
-    static constexpr std::uint32_t kThresholdBatch4EvidenceSealed = 1U << 31U;
-#endif
-
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    enum class IncrementalReciprocalCounter : size_t {
-        kReciprocalLinks,
-        kDirectAppends,
-        kFullOverflows,
-        kCertificateHits,
-        kCertificateMisses,
-        kCertificateSets,
-        kCertificateClears,
-        kUnchangedNewFarthest,
-        kUnchangedRejected,
-        kUpdatedFull,
-        kUpdatedUnderfull,
-        kFallbackInvalidState,
-        kFallbackScratchCapacity,
-        kFallbackDuplicate,
-        kFallbackCenterTie,
-        kFallbackNonfiniteCenter,
-        kFallbackUncertifiedOrder,
-        kBaselineCenterDistanceEvaluations,
-        kBaselinePairDistanceEvaluations,
-        kIncrementalCenterDistanceEvaluations,
-        kIncrementalPairDistanceEvaluations,
-        kShadowComparisons,
-        kShadowMismatches,
-        kPredictedAvoidedDistanceEvaluations,
-        kPredictedExtraDistanceEvaluations,
-        kCount,
-    };
-#endif
 
     static std::pair<size_t, size_t> GetMmax(size_t M) {
         constexpr size_t kMaximumM = static_cast<size_t>(std::numeric_limits<VertexListSize>::max()) / 2;
@@ -178,30 +110,10 @@ public:
         : M_(std::exchange(other.M_, 0)), ef_construction_(std::exchange(other.ef_construction_, 0)), mult_(std::exchange(other.mult_, 0.0)),
           build_failed_(other.build_failed_.exchange(false, std::memory_order_acq_rel)), level_generator_(std::move(other.level_generator_)),
           level_cursor_(std::exchange(other.level_cursor_, 0)),
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-          incremental_reciprocal_certification_disabled_(other.incremental_reciprocal_certification_disabled_),
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) && defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-          incremental_reciprocal_enabled_(std::exchange(other.incremental_reciprocal_enabled_, true)),
-#endif
-#endif
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-          incremental_reciprocal_execution_evidence_(other.incremental_reciprocal_execution_evidence_.exchange(0, std::memory_order_acq_rel)),
-#endif
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-          threshold_batch4_execution_evidence_(other.threshold_batch4_execution_evidence_.exchange(0, std::memory_order_acq_rel)),
-#endif
           data_store_(std::move(other.data_store_)), distance_(std::move(other.distance_)),
           prefetch_step_(L1_CACHE_SIZE / data_store_.vec_store_meta().GetVecSizeInBytes()) {
         static_assert(std::is_nothrow_move_constructible_v<DataStore>);
         static_assert(std::is_nothrow_move_constructible_v<Distance>);
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        other.incremental_reciprocal_certificate_masks_.clear();
-#endif
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        for (auto &counter : other.reciprocal_counters_) {
-            counter.store(0, std::memory_order_relaxed);
-        }
-#endif
     }
     This &operator=(This &&other) noexcept {
         static_assert(std::is_nothrow_move_assignable_v<DataStore>);
@@ -213,34 +125,9 @@ public:
             build_failed_.store(other.build_failed_.exchange(false, std::memory_order_acq_rel), std::memory_order_release);
             level_generator_ = std::move(other.level_generator_);
             level_cursor_ = std::exchange(other.level_cursor_, 0);
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-            incremental_reciprocal_execution_evidence_.store(other.incremental_reciprocal_execution_evidence_.exchange(0, std::memory_order_acq_rel),
-                                                             std::memory_order_release);
-#endif
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-            threshold_batch4_execution_evidence_.store(other.threshold_batch4_execution_evidence_.exchange(0, std::memory_order_acq_rel),
-                                                       std::memory_order_release);
-#endif
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            incremental_reciprocal_certificate_masks_.clear();
-            other.incremental_reciprocal_certificate_masks_.clear();
-            incremental_reciprocal_certification_disabled_ =
-                incremental_reciprocal_certification_disabled_ || other.incremental_reciprocal_certification_disabled_;
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) && defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-            incremental_reciprocal_enabled_ = std::exchange(other.incremental_reciprocal_enabled_, true);
-#endif
-#endif
             data_store_ = std::move(other.data_store_);
             distance_ = std::move(other.distance_);
             prefetch_step_ = L1_CACHE_SIZE / data_store_.vec_store_meta().GetVecSizeInBytes();
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            for (auto &counter : reciprocal_counters_) {
-                counter.store(0, std::memory_order_relaxed);
-            }
-            for (auto &counter : other.reciprocal_counters_) {
-                counter.store(0, std::memory_order_relaxed);
-            }
-#endif
         }
         return *this;
     }
@@ -275,225 +162,7 @@ public:
 protected:
     static constexpr LayerSize kMaxSupportedLayer = kHnswMaxSupportedLayer;
 
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    bool IncrementalReciprocalActive() const {
-        if constexpr (!kIncrementalReciprocalSupported) {
-            return false;
-        }
-        if (incremental_reciprocal_certification_disabled_) {
-            return false;
-        }
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) && defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-        return incremental_reciprocal_enabled_;
-#else
-        return true;
-#endif
-    }
 
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    void CountIncrementalReciprocal(IncrementalReciprocalCounter counter, std::uint64_t amount = 1) const {
-        reciprocal_counters_[static_cast<size_t>(counter)].fetch_add(amount, std::memory_order_relaxed);
-    }
-
-    void CountIncrementalReciprocalResult(HnswIncrementalReciprocalResult result, VertexListSize result_size, size_t capacity) const {
-        switch (result) {
-            case HnswIncrementalReciprocalResult::kFallbackInvalidState:
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kFallbackInvalidState);
-                break;
-            case HnswIncrementalReciprocalResult::kFallbackScratchCapacity:
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kFallbackScratchCapacity);
-                break;
-            case HnswIncrementalReciprocalResult::kFallbackDuplicate:
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kFallbackDuplicate);
-                break;
-            case HnswIncrementalReciprocalResult::kFallbackCenterTie:
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kFallbackCenterTie);
-                break;
-            case HnswIncrementalReciprocalResult::kFallbackNonFiniteCenter:
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kFallbackNonfiniteCenter);
-                break;
-            case HnswIncrementalReciprocalResult::kFallbackUncertifiedOrder:
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kFallbackUncertifiedOrder);
-                break;
-            case HnswIncrementalReciprocalResult::kUnchangedNewFarthest:
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kUnchangedNewFarthest);
-                break;
-            case HnswIncrementalReciprocalResult::kUnchangedRejected:
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kUnchangedRejected);
-                break;
-            case HnswIncrementalReciprocalResult::kUpdated:
-                CountIncrementalReciprocal(result_size == static_cast<VertexListSize>(capacity) ? IncrementalReciprocalCounter::kUpdatedFull
-                                                                                                : IncrementalReciprocalCounter::kUpdatedUnderfull);
-                break;
-        }
-    }
-#endif
-
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE) && defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL)
-    void RecordIncrementalReciprocalExecutionEvidence(HnswIncrementalReciprocalResult result) {
-        if constexpr (!kIncrementalReciprocalSupported) {
-            return;
-        }
-        const std::uint32_t state = incremental_reciprocal_execution_evidence_.load(std::memory_order_relaxed);
-        constexpr std::uint32_t kComplete = kIncrementalReciprocalEvidenceEligible | kIncrementalReciprocalEvidenceUnchanged |
-                                            kIncrementalReciprocalEvidenceUpdated;
-        if ((state & kIncrementalReciprocalEvidenceArmed) == 0 || (state & kIncrementalReciprocalEvidenceSealed) != 0 ||
-            (state & kComplete) == kComplete) {
-            return;
-        }
-        std::uint32_t observed = kIncrementalReciprocalEvidenceEligible;
-        switch (result) {
-            case HnswIncrementalReciprocalResult::kUnchangedNewFarthest:
-            case HnswIncrementalReciprocalResult::kUnchangedRejected:
-                observed |= kIncrementalReciprocalEvidenceUnchanged;
-                break;
-            case HnswIncrementalReciprocalResult::kUpdated:
-                observed |= kIncrementalReciprocalEvidenceUpdated;
-                break;
-            default:
-                break;
-        }
-        const std::uint32_t missing = observed & ~state;
-        if (missing != 0) {
-            incremental_reciprocal_execution_evidence_.fetch_or(missing, std::memory_order_relaxed);
-        }
-    }
-#endif
-
-    bool IsIncrementalReciprocalCertified(VertexType vertex, i32 layer) const {
-        return IncrementalReciprocalActive() && vertex >= 0 && static_cast<size_t>(vertex) < incremental_reciprocal_certificate_masks_.size() &&
-               layer >= 0 && static_cast<size_t>(layer) < kIncrementalReciprocalCertificateLayerCount &&
-               (incremental_reciprocal_certificate_masks_[static_cast<size_t>(vertex)] & (std::uint64_t{1} << static_cast<size_t>(layer))) != 0;
-    }
-
-    void SetIncrementalReciprocalCertificate(VertexType vertex, i32 layer) {
-        if (!IncrementalReciprocalActive() || vertex < 0 || static_cast<size_t>(vertex) >= incremental_reciprocal_certificate_masks_.size() ||
-            layer < 0 || static_cast<size_t>(layer) >= kIncrementalReciprocalCertificateLayerCount) {
-            return;
-        }
-        const std::uint64_t bit = std::uint64_t{1} << static_cast<size_t>(layer);
-        std::uint64_t &mask = incremental_reciprocal_certificate_masks_[static_cast<size_t>(vertex)];
-        if ((mask & bit) == 0) {
-            mask |= bit;
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            CountIncrementalReciprocal(IncrementalReciprocalCounter::kCertificateSets);
-#endif
-        }
-    }
-
-    void ClearIncrementalReciprocalCertificate(VertexType vertex, i32 layer) {
-        if constexpr (!kIncrementalReciprocalSupported) {
-            return;
-        }
-        if (vertex < 0 || static_cast<size_t>(vertex) >= incremental_reciprocal_certificate_masks_.size() || layer < 0 ||
-            static_cast<size_t>(layer) >= kIncrementalReciprocalCertificateLayerCount) {
-            return;
-        }
-        const std::uint64_t bit = std::uint64_t{1} << static_cast<size_t>(layer);
-        std::uint64_t &mask = incremental_reciprocal_certificate_masks_[static_cast<size_t>(vertex)];
-        if ((mask & bit) != 0) {
-            mask &= ~bit;
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            CountIncrementalReciprocal(IncrementalReciprocalCounter::kCertificateClears);
-#endif
-        }
-    }
-
-    void ClearAllIncrementalReciprocalCertificates() {
-        if constexpr (!kIncrementalReciprocalSupported) {
-            return;
-        }
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        std::uint64_t cleared = 0;
-#endif
-        for (std::uint64_t &mask : incremental_reciprocal_certificate_masks_) {
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            cleared += static_cast<std::uint64_t>(std::popcount(mask));
-#endif
-            mask = 0;
-        }
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        CountIncrementalReciprocal(IncrementalReciprocalCounter::kCertificateClears, cleared);
-#endif
-    }
-
-    void PrepareIncrementalReciprocalCertificates() {
-        if constexpr (!kIncrementalReciprocalSupported) {
-            return;
-        }
-        const size_t vertex_count = data_store_.cur_vec_num();
-        if (incremental_reciprocal_certificate_masks_.size() < vertex_count) {
-            incremental_reciprocal_certificate_masks_.resize(vertex_count, 0);
-            incremental_reciprocal_certificate_bytes_.store(incremental_reciprocal_certificate_masks_.capacity() * sizeof(std::uint64_t),
-                                                            std::memory_order_relaxed);
-        }
-    }
-
-    bool HasValidIncrementalReciprocalIds(VertexType center, const VertexType *neighbors, VertexListSize neighbor_count, size_t capacity) const {
-        if constexpr (!kIncrementalReciprocalSupported) {
-            return false;
-        }
-        const size_t vertex_count = data_store_.cur_vec_num();
-        if (center < 0 || static_cast<size_t>(center) >= vertex_count || neighbors == nullptr || neighbor_count < 0 ||
-            static_cast<size_t>(neighbor_count) != capacity || capacity > kIncrementalReciprocalScratchCapacity) {
-            return false;
-        }
-        std::array<VertexType, kIncrementalReciprocalScratchCapacity> sorted_neighbors;
-        for (size_t index = 0; index < capacity; ++index) {
-            const VertexType neighbor = neighbors[index];
-            if (neighbor < 0 || static_cast<size_t>(neighbor) >= vertex_count || neighbor == center) {
-                return false;
-            }
-            sorted_neighbors[index] = neighbor;
-        }
-        auto sorted_end = sorted_neighbors.begin() + static_cast<std::ptrdiff_t>(capacity);
-        std::sort(sorted_neighbors.begin(), sorted_end);
-        return std::adjacent_find(sorted_neighbors.begin(), sorted_end) == sorted_end;
-    }
-
-    static bool IsFiniteIncrementalReciprocalDistance(DistanceType distance) {
-        if constexpr (std::is_floating_point_v<DistanceType>) {
-            return std::isfinite(distance);
-        }
-        return true;
-    }
-#endif
-
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-    void RecordThresholdBatch4ExecutionEvidence(bool threshold_path_ran, std::uint8_t exact_mask) const {
-        const std::uint32_t state = threshold_batch4_execution_evidence_.load(std::memory_order_relaxed);
-        constexpr std::uint32_t kComplete =
-            kThresholdBatch4EvidenceEligible | kThresholdBatch4EvidenceRejected | kThresholdBatch4EvidenceSurviving;
-        if ((state & kThresholdBatch4EvidenceArmed) == 0 || (state & kThresholdBatch4EvidenceSealed) != 0 ||
-            (state & kComplete) == kComplete) {
-            return;
-        }
-        constexpr std::uint8_t kFourLaneMask = 0x0fU;
-        constexpr std::uint8_t kUpperLaneMask = static_cast<std::uint8_t>(~kFourLaneMask);
-        if ((exact_mask & kUpperLaneMask) != 0) {
-            throw std::logic_error("thresholded Batch4 execution evidence observed invalid upper mask bits");
-        }
-#if defined(INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL)
-        if constexpr (!kThresholdBatch4ExecutionEvidenceSupported) {
-            return;
-        }
-        if (!threshold_path_ran) {
-            return;
-        }
-        const std::uint8_t surviving_lanes = exact_mask & kFourLaneMask;
-        std::uint32_t observed = kThresholdBatch4EvidenceEligible;
-        if (surviving_lanes != 0 && surviving_lanes != kFourLaneMask) {
-            observed |= kThresholdBatch4EvidenceRejected | kThresholdBatch4EvidenceSurviving;
-        }
-        const std::uint32_t missing = observed & ~state;
-        if (missing != 0) {
-            threshold_batch4_execution_evidence_.fetch_or(missing, std::memory_order_relaxed);
-        }
-#else
-        static_cast<void>(threshold_path_ran);
-#endif
-    }
-#endif
 
     void EnsureBuildUsable() const {
         if (IsBuildFailed()) {
@@ -524,9 +193,6 @@ protected:
     std::tuple<size_t, std::unique_ptr<DistanceType[]>, std::unique_ptr<SearchLayerReturnParam3T<ColumnLogicalType>[]>>
     SearchLayer(VertexType enter_point, const QueryType &query, VertexType query_i, i32 layer_idx, size_t result_n, const Filter &filter) const {
         static_assert(ColumnLogicalType == LogicalType::kEmbedding || ColumnLogicalType == LogicalType::kMultiVector);
-#if defined(INFINITY_ENABLE_HNSW_LVQ_CAPTURE)
-        HnswLvqPhaseScope capture_phase(query_i == kInvalidVertex ? HnswLvqPhase::kQuery : HnswLvqPhase::kConstructionBeam, layer_idx);
-#endif
         auto d_ptr = std::make_unique_for_overwrite<DistanceType[]>(result_n);
         auto i_ptr = std::make_unique_for_overwrite<SearchLayerReturnParam3T<ColumnLogicalType>[]>(result_n);
         using ResultHandler = std::conditional_t<ColumnLogicalType == LogicalType::kEmbedding,
@@ -608,9 +274,6 @@ protected:
             if constexpr (WithLock && OwnMem && ColumnLogicalType == LogicalType::kEmbedding && std::is_same_v<Filter, std::nullopt_t> &&
                           FourCandidateDistance<Distance, DataStore>) {
                 if (
-#if defined(__APPLE__) && defined(__aarch64__) && defined(INFINITY_DISABLE_APPLE_HNSW_BATCH4_TRAVERSAL)
-                    false &&
-#endif
                     query_i != kInvalidVertex && distance_.SupportsBatch4()) {
                     std::array<VertexType, 4> pending_vertices{};
                     std::array<DistanceType, 4> pending_distances{};
@@ -629,21 +292,9 @@ protected:
                         if (pending_count == pending_vertices.size()) {
                             bool threshold_path_ran = false;
                             std::uint8_t exact_mask = 0;
-#if defined(INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL)
-                            if constexpr (FourCandidateThresholdDistance<Distance, DataStore>) {
-                                if (result_handler.GetSize(0) == result_n && distance_.SupportsBatch4WithinThreshold()) {
-                                    const DistanceType threshold = result_handler.GetDistance0(0);
-                                    exact_mask = distance_.Batch4WithinThreshold(query, pending_vertices, data_store_, threshold, pending_distances);
-                                    threshold_path_ran = true;
-                                }
-                            }
-#endif
                             if (!threshold_path_ran) {
                                 distance_.Batch4(query, pending_vertices, data_store_, pending_distances);
                             }
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-                            RecordThresholdBatch4ExecutionEvidence(threshold_path_ran, exact_mask);
-#endif
                             for (size_t lane = 0; lane < pending_count; ++lane) {
                                 if (!threshold_path_ran || (exact_mask & (std::uint8_t{1} << lane)) != 0) {
                                     commit_candidate(pending_distances[lane], pending_vertices[lane]);
@@ -670,9 +321,6 @@ protected:
 
     template <bool WithLock>
     VertexType SearchLayerNearest(VertexType enter_point, const QueryType &query, VertexType query_i, i32 layer_idx) const {
-#if defined(INFINITY_ENABLE_HNSW_LVQ_CAPTURE)
-        HnswLvqPhaseScope capture_phase(query_i == kInvalidVertex ? HnswLvqPhase::kQuery : HnswLvqPhase::kConstructionGreedy, layer_idx);
-#endif
         VertexType cur_p = enter_point;
         auto cur_dist = distance_(query, cur_p, data_store_, query_i);
         bool check = true;
@@ -706,15 +354,7 @@ protected:
                                   size_t M,
                                   VertexType *result_p,
                                   VertexListSize *result_size_p
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                                  ,
-                                  IncrementalReciprocalSelectionMetadata *incremental_metadata = nullptr
-#endif
     ) const {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        IncrementalReciprocalSelectionMetadata metadata{};
-        std::optional<DistanceType> previous_accepted_distance;
-#endif
         VertexListSize result_size = 0;
         if (candidates.size() < M) {
             std::sort(candidates.begin(), candidates.end(), CMPReverse());
@@ -722,10 +362,6 @@ protected:
                 result_p[result_size++] = idx;
             }
         } else {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            metadata.heuristic_branch = true;
-            metadata.finite_strict_order = true;
-#endif
             std::make_heap(candidates.begin(), candidates.end(), CMPReverse());
             while (!candidates.empty() && size_t(result_size) < M) {
                 std::pop_heap(candidates.begin(), candidates.end(), CMPReverse());
@@ -735,9 +371,6 @@ protected:
                 auto check_scalar_tail = [&](size_t start) {
                     for (size_t i = start; i < size_t(result_size); ++i) {
                         VertexType r_idx = result_p[i];
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                        ++metadata.pair_distance_evaluations;
-#endif
                         auto cr_dist = distance_(c_data, r_idx, data_store_, c_idx);
                         if (cr_dist < c_dist) {
                             check = false;
@@ -745,55 +378,8 @@ protected:
                         }
                     }
                 };
-                if constexpr (EnableBatch4 && FourCandidateDistance<Distance, DataStore>) {
-                    if (
-#if defined(__APPLE__) && defined(__aarch64__) && defined(INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING)
-                        false &&
-#endif
-                        distance_.SupportsBatch4()) {
-                        size_t i = 0;
-                        for (; i + 4 <= size_t(result_size); i += 4) {
-                            const std::array<VertexType, 4> result_vertices{
-                                result_p[i],
-                                result_p[i + 1],
-                                result_p[i + 2],
-                                result_p[i + 3],
-                            };
-                            std::array<DistanceType, 4> result_distances{};
-                            distance_.Batch4(c_data, result_vertices, data_store_, result_distances);
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                            metadata.used_batch4 = true;
-#endif
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                            metadata.pair_distance_evaluations += result_distances.size();
-#endif
-                            for (DistanceType cr_dist : result_distances) {
-                                if (cr_dist < c_dist) {
-                                    check = false;
-                                    break;
-                                }
-                            }
-                            if (!check) {
-                                break;
-                            }
-                        }
-                        if (check) {
-                            check_scalar_tail(i);
-                        }
-                    } else {
-                        check_scalar_tail(0);
-                    }
-                } else {
-                    check_scalar_tail(0);
-                }
+                check_scalar_tail(0);
                 if (check) {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                    if (!IsFiniteIncrementalReciprocalDistance(c_dist) ||
-                        (previous_accepted_distance.has_value() && !(c_dist > *previous_accepted_distance))) {
-                        metadata.finite_strict_order = false;
-                    }
-                    previous_accepted_distance = c_dist;
-#endif
                     result_p[result_size++] = c_idx;
                 }
                 candidates.pop_back();
@@ -801,18 +387,9 @@ protected:
             std::reverse(result_p, result_p + result_size);
         }
         *result_size_p = result_size;
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        metadata.full = size_t(result_size) == M;
-        if (incremental_metadata != nullptr) {
-            *incremental_metadata = metadata;
-        }
-#endif
     }
 
     void ConnectNeighbors(VertexType vertex_i, const VertexType *q_neighbors_p, VertexListSize q_neighbor_size, i32 layer_idx) {
-#if defined(INFINITY_ENABLE_HNSW_LVQ_CAPTURE)
-        HnswLvqPhaseScope capture_phase(HnswLvqPhase::kReciprocalSelection, layer_idx);
-#endif
         for (int i = 0; i < q_neighbor_size; ++i) {
             VertexType n_idx = q_neighbors_p[i];
 
@@ -821,215 +398,25 @@ protected:
             auto [n_neighbors_p, n_neighbor_size_p] = data_store_.GetNeighborsMut(n_idx, layer_idx);
             VertexListSize n_neighbor_size = *n_neighbor_size_p;
             size_t Mmax = layer_idx == 0 ? data_store_.Mmax0() : data_store_.Mmax();
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            if constexpr (kIncrementalReciprocalSupported) {
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kReciprocalLinks);
-            }
-#endif
             if (n_neighbor_size < VertexListSize(Mmax)) {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                ClearIncrementalReciprocalCertificate(n_idx, layer_idx);
-#endif
                 *(n_neighbors_p + n_neighbor_size) = vertex_i;
                 *n_neighbor_size_p = n_neighbor_size + 1;
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                if constexpr (kIncrementalReciprocalSupported) {
-                    CountIncrementalReciprocal(IncrementalReciprocalCounter::kDirectAppends);
-                }
-#endif
                 continue;
             }
             QueryType n_data = data_store_.GetVecToQuery(n_idx);
             auto n_dist = distance_(n_data, vertex_i, data_store_, n_idx);
 
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            const bool certified = IsIncrementalReciprocalCertified(n_idx, layer_idx);
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            if constexpr (kIncrementalReciprocalSupported) {
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kFullOverflows);
-                CountIncrementalReciprocal(certified ? IncrementalReciprocalCounter::kCertificateHits
-                                                     : IncrementalReciprocalCounter::kCertificateMisses);
-            }
-#endif
-
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            std::array<VertexType, kIncrementalReciprocalScratchCapacity> shadow_neighbors;
-            VertexListSize shadow_neighbor_size = n_neighbor_size;
-            HnswIncrementalReciprocalResult shadow_result = HnswIncrementalReciprocalResult::kFallbackInvalidState;
-            bool shadow_comparable = false;
-            std::uint64_t incremental_center_evaluations = 0;
-            std::uint64_t incremental_pair_evaluations = 0;
-            if (certified && n_neighbor_size >= 0 && size_t(n_neighbor_size) == Mmax && Mmax <= kIncrementalReciprocalScratchCapacity) {
-                std::copy_n(n_neighbors_p, size_t(n_neighbor_size), shadow_neighbors.begin());
-                std::array<DistanceType, kIncrementalReciprocalScratchCapacity> center_distance_scratch;
-                QueryType vertex_data = data_store_.GetVecToQuery(vertex_i);
-                incremental_center_evaluations = 1;
-                shadow_result = TryIncrementalReciprocalUpdate(
-                    vertex_i,
-                    n_dist,
-                    shadow_neighbors.data(),
-                    &shadow_neighbor_size,
-                    Mmax,
-                    std::span<DistanceType>(center_distance_scratch.data(), center_distance_scratch.size()),
-                    [&](VertexType old_vertex) {
-                        ++incremental_center_evaluations;
-                        return distance_(n_data, old_vertex, data_store_, n_idx);
-                    },
-                    [&](VertexType old_vertex) {
-                        ++incremental_pair_evaluations;
-                        return distance_(vertex_data, old_vertex, data_store_, vertex_i);
-                    },
-                    [&](VertexType old_vertex) {
-                        ++incremental_pair_evaluations;
-                        QueryType old_data = data_store_.GetVecToQuery(old_vertex);
-                        return distance_(old_data, vertex_i, data_store_, old_vertex);
-                    });
-                CountIncrementalReciprocalResult(shadow_result, shadow_neighbor_size, Mmax);
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kIncrementalCenterDistanceEvaluations, incremental_center_evaluations);
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kIncrementalPairDistanceEvaluations, incremental_pair_evaluations);
-                shadow_comparable = shadow_result == HnswIncrementalReciprocalResult::kUnchangedNewFarthest ||
-                                    shadow_result == HnswIncrementalReciprocalResult::kUnchangedRejected ||
-                                    shadow_result == HnswIncrementalReciprocalResult::kUpdated;
-            }
-#elif defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL)
-            if (certified && n_neighbor_size >= 0 && size_t(n_neighbor_size) == Mmax && Mmax <= kIncrementalReciprocalScratchCapacity) {
-                std::array<VertexType, kIncrementalReciprocalScratchCapacity> incremental_neighbors;
-                std::copy_n(n_neighbors_p, size_t(n_neighbor_size), incremental_neighbors.begin());
-                VertexListSize incremental_neighbor_size = n_neighbor_size;
-                std::array<DistanceType, kIncrementalReciprocalScratchCapacity> center_distance_scratch;
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-                std::uint64_t incremental_center_evaluations = 1;
-                std::uint64_t incremental_pair_evaluations = 0;
-#endif
-                QueryType vertex_data = data_store_.GetVecToQuery(vertex_i);
-                const HnswIncrementalReciprocalResult incremental_result = TryIncrementalReciprocalUpdate(
-                    vertex_i,
-                    n_dist,
-                    incremental_neighbors.data(),
-                    &incremental_neighbor_size,
-                    Mmax,
-                    std::span<DistanceType>(center_distance_scratch.data(), center_distance_scratch.size()),
-                    [&](VertexType old_vertex) {
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-                        ++incremental_center_evaluations;
-#endif
-                        return distance_(n_data, old_vertex, data_store_, n_idx);
-                    },
-                    [&](VertexType old_vertex) {
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-                        ++incremental_pair_evaluations;
-#endif
-                        return distance_(vertex_data, old_vertex, data_store_, vertex_i);
-                    },
-                    [&](VertexType old_vertex) {
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-                        ++incremental_pair_evaluations;
-#endif
-                        QueryType old_data = data_store_.GetVecToQuery(old_vertex);
-                        return distance_(old_data, vertex_i, data_store_, old_vertex);
-                    });
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-                RecordIncrementalReciprocalExecutionEvidence(incremental_result);
-#endif
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-                CountIncrementalReciprocalResult(incremental_result, incremental_neighbor_size, Mmax);
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kIncrementalCenterDistanceEvaluations, incremental_center_evaluations);
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kIncrementalPairDistanceEvaluations, incremental_pair_evaluations);
-#endif
-                if (incremental_result == HnswIncrementalReciprocalResult::kUnchangedNewFarthest ||
-                    incremental_result == HnswIncrementalReciprocalResult::kUnchangedRejected) {
-                    continue;
-                }
-                if (incremental_result == HnswIncrementalReciprocalResult::kUpdated) {
-                    std::copy_n(incremental_neighbors.begin(), size_t(incremental_neighbor_size), n_neighbors_p);
-                    *n_neighbor_size_p = incremental_neighbor_size;
-                    if (size_t(incremental_neighbor_size) != Mmax) {
-                        ClearIncrementalReciprocalCertificate(n_idx, layer_idx);
-                    }
-                    continue;
-                }
-            }
-#endif
-#endif
 
             std::vector<PDV> candidates;
             candidates.reserve(n_neighbor_size + 1);
             candidates.emplace_back(n_dist, vertex_i);
             size_t candidate_index = 0;
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            bool used_batch4_center_distances = false;
-#endif
-            if constexpr (FourCandidateDistance<Distance, DataStore>) {
-                if (
-#if defined(__APPLE__) && defined(__aarch64__) && defined(INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING)
-                    false &&
-#endif
-                    distance_.SupportsBatch4()) {
-                    for (; candidate_index + 4 <= size_t(n_neighbor_size); candidate_index += 4) {
-                        const std::array<VertexType, 4> candidate_vertices{
-                            n_neighbors_p[candidate_index],
-                            n_neighbors_p[candidate_index + 1],
-                            n_neighbors_p[candidate_index + 2],
-                            n_neighbors_p[candidate_index + 3],
-                        };
-                        std::array<DistanceType, 4> candidate_distances{};
-                        distance_.Batch4(n_data, candidate_vertices, data_store_, candidate_distances);
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                        used_batch4_center_distances = true;
-#endif
-                        for (size_t lane = 0; lane < candidate_vertices.size(); ++lane) {
-                            candidates.emplace_back(candidate_distances[lane], candidate_vertices[lane]);
-                        }
-                    }
-                }
-            }
             for (; candidate_index < size_t(n_neighbor_size); ++candidate_index) {
                 const VertexType candidate_vertex = n_neighbors_p[candidate_index];
                 candidates.emplace_back(distance_(n_data, candidate_vertex, data_store_, n_idx), candidate_vertex);
             }
 
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            IncrementalReciprocalSelectionMetadata selection_metadata{};
-            SelectNeighborsHeuristic<true>(std::move(candidates), Mmax, n_neighbors_p, n_neighbor_size_p, &selection_metadata); // write in memory
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            CountIncrementalReciprocal(IncrementalReciprocalCounter::kBaselineCenterDistanceEvaluations, std::uint64_t(n_neighbor_size) + 1);
-            CountIncrementalReciprocal(IncrementalReciprocalCounter::kBaselinePairDistanceEvaluations, selection_metadata.pair_distance_evaluations);
-#endif
-
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            if (certified && shadow_comparable) {
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kShadowComparisons);
-                const bool exact = shadow_neighbor_size == *n_neighbor_size_p &&
-                                   (*n_neighbor_size_p == 0 ||
-                                    std::memcmp(shadow_neighbors.data(), n_neighbors_p, size_t(*n_neighbor_size_p) * sizeof(VertexType)) == 0);
-                if (!exact) {
-                    CountIncrementalReciprocal(IncrementalReciprocalCounter::kShadowMismatches);
-                } else {
-                    const std::uint64_t baseline_evaluations = std::uint64_t(n_neighbor_size) + 1 + selection_metadata.pair_distance_evaluations;
-                    const std::uint64_t incremental_evaluations = incremental_center_evaluations + incremental_pair_evaluations;
-                    CountIncrementalReciprocal(baseline_evaluations >= incremental_evaluations
-                                                   ? IncrementalReciprocalCounter::kPredictedAvoidedDistanceEvaluations
-                                                   : IncrementalReciprocalCounter::kPredictedExtraDistanceEvaluations,
-                                               baseline_evaluations >= incremental_evaluations ? baseline_evaluations - incremental_evaluations
-                                                                                               : incremental_evaluations - baseline_evaluations);
-                }
-            } else if (certified) {
-                const std::uint64_t nonshared_incremental_evaluations =
-                    incremental_center_evaluations + incremental_pair_evaluations - std::min<std::uint64_t>(incremental_center_evaluations, 1);
-                CountIncrementalReciprocal(IncrementalReciprocalCounter::kPredictedExtraDistanceEvaluations, nonshared_incremental_evaluations);
-            }
-#endif
-
-            if (Mmax <= kIncrementalReciprocalScratchCapacity && !used_batch4_center_distances && selection_metadata.heuristic_branch &&
-                !selection_metadata.used_batch4 && selection_metadata.finite_strict_order && selection_metadata.full &&
-                HasValidIncrementalReciprocalIds(n_idx, n_neighbors_p, *n_neighbor_size_p, Mmax)) {
-                SetIncrementalReciprocalCertificate(n_idx, layer_idx);
-            } else {
-                ClearIncrementalReciprocalCertificate(n_idx, layer_idx);
-            }
-#else
             SelectNeighborsHeuristic<true>(std::move(candidates), Mmax, n_neighbors_p, n_neighbor_size_p); // write in memory
-#endif
         }
     }
 
@@ -1116,9 +503,6 @@ public:
         if (!lsg_builder_.has_value()) {
             UnrecoverableError("lsg_builder_ not exist, maybe not Init!");
         }
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        ClearAllIncrementalReciprocalCertificates();
-#endif
         distance_.SetLSGParam(lsg_builder_->alpha(), lsg_builder_->avg());
     }
 
@@ -1154,20 +538,12 @@ public:
     std::pair<VertexType, VertexType> StoreDataWithOperationLockHeld(Iterator &&iter, const HnswInsertConfig &config = kDefaultHnswInsertConfig) {
         EnsureBuildUsable();
         try {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            if (config.optimize_) {
-                ClearAllIncrementalReciprocalCertificates();
-            }
-#endif
             std::pair<VertexType, VertexType> stored_range;
             if (config.optimize_) {
                 stored_range = data_store_.OptAddVec(std::forward<Iterator>(iter));
             } else {
                 stored_range = data_store_.AddVec(std::forward<Iterator>(iter));
             }
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            PrepareIncrementalReciprocalCertificates();
-#endif
             return stored_range;
         } catch (...) {
             MarkBuildFailed();
@@ -1180,9 +556,6 @@ public:
         auto operation_lock = AcquireExclusiveOperationLock();
         EnsureBuildUsable();
         try {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            ClearAllIncrementalReciprocalCertificates();
-#endif
             data_store_.Optimize();
         } catch (...) {
             MarkBuildFailed();
@@ -1317,15 +690,6 @@ private:
                 if (*degree < 0 || static_cast<size_t>(*degree) > level_zero_capacity) {
                     throw std::logic_error("HNSW connectivity finalization observed an invalid level-zero degree");
                 }
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                const bool certificate_before = IsIncrementalReciprocalCertified(bridge->source, 0);
-#endif
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                ClearIncrementalReciprocalCertificate(bridge->source, 0);
-#endif
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                const bool certificate_after = IsIncrementalReciprocalCertified(bridge->source, 0);
-#endif
                 if (bridge->append) {
                     if (*degree != bridge->index || static_cast<size_t>(*degree) >= level_zero_capacity) {
                         throw std::logic_error("HNSW connectivity finalization observed a concurrent graph mutation");
@@ -1338,11 +702,6 @@ private:
                     }
                     neighbors[bridge->index] = target;
                 }
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-                if (connectivity_repair_hook_) {
-                    connectivity_repair_hook_(bridge->source, target, bridge->append, certificate_before, certificate_after);
-                }
-#endif
             }
 
             visited[next_unreachable] = 1;
@@ -1494,11 +853,6 @@ private:
         i32 max_layer = -1;
         VertexType ep = kInvalidVertex;
         const bool initial_entry_point = ClaimInitialEntryPoint(vertex_i, q_layer, max_layer, ep);
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        if (build_entry_hook_) {
-            build_entry_hook_(vertex_i);
-        }
-#endif
         if (initial_entry_point) {
             return;
         }
@@ -1526,9 +880,6 @@ private:
             {
                 HnswVertexUniqueLock vertex_lock = data_store_.UniqueLock(vertex_i);
                 const auto [q_neighbors_p, q_neighbor_size_p] = data_store_.GetNeighborsMut(vertex_i, cur_layer);
-#if defined(INFINITY_ENABLE_HNSW_LVQ_CAPTURE)
-                HnswLvqPhaseScope capture_phase(HnswLvqPhase::kNewSelection, cur_layer);
-#endif
                 SelectNeighborsHeuristic(std::move(search_result), M_, q_neighbors_p, q_neighbor_size_p);
                 if (*q_neighbor_size_p <= 0) {
                     throw std::logic_error("HNSW construction selected an empty neighbor list for a non-empty graph");
@@ -1686,218 +1037,16 @@ public:
 
     size_t mem_usage() const {
         size_t usage = data_store_.mem_usage();
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        usage += incremental_reciprocal_certificate_bytes_.load(std::memory_order_relaxed);
-#endif
         return usage;
     }
 
     Distance &distance() {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-        auto operation_lock = AcquireExclusiveOperationLock();
-        ClearAllIncrementalReciprocalCertificates();
-        incremental_reciprocal_certification_disabled_ = true;
-#endif
         return distance_;
     }
 
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-    bool ArmIncrementalReciprocalExecutionEvidence() {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        EnsureBuildUsable();
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL)
-        if constexpr (kIncrementalReciprocalSupported) {
-            if (data_store_.cur_vec_num() != 0) {
-                throw std::invalid_argument("incremental reciprocal execution evidence must be armed before insertion");
-            }
-            std::uint32_t expected = 0;
-            return incremental_reciprocal_execution_evidence_.compare_exchange_strong(expected,
-                                                                                      kIncrementalReciprocalEvidenceArmed,
-                                                                                      std::memory_order_release,
-                                                                                      std::memory_order_relaxed);
-        }
-#endif
-        return false;
-    }
 
-    HnswIncrementalReciprocalExecutionEvidence GetIncrementalReciprocalExecutionEvidence() const {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        const std::uint32_t state = incremental_reciprocal_execution_evidence_.load(std::memory_order_acquire);
-        return {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL)
-            .treatment_compiled = kIncrementalReciprocalSupported,
-#else
-            .treatment_compiled = false,
-#endif
-            .capture_armed = (state & kIncrementalReciprocalEvidenceArmed) != 0,
-            .eligible_branch_entered = (state & kIncrementalReciprocalEvidenceEligible) != 0,
-            .successful_unchanged_observed = (state & kIncrementalReciprocalEvidenceUnchanged) != 0,
-            .successful_updated_observed = (state & kIncrementalReciprocalEvidenceUpdated) != 0,
-        };
-    }
 
-    HnswIncrementalReciprocalExecutionEvidence SealAndGetIncrementalReciprocalExecutionEvidence() {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        const std::uint32_t state =
-            incremental_reciprocal_execution_evidence_.fetch_or(kIncrementalReciprocalEvidenceSealed, std::memory_order_acq_rel) |
-            kIncrementalReciprocalEvidenceSealed;
-        return {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL)
-            .treatment_compiled = kIncrementalReciprocalSupported,
-#else
-            .treatment_compiled = false,
-#endif
-            .capture_armed = (state & kIncrementalReciprocalEvidenceArmed) != 0,
-            .eligible_branch_entered = (state & kIncrementalReciprocalEvidenceEligible) != 0,
-            .successful_unchanged_observed = (state & kIncrementalReciprocalEvidenceUnchanged) != 0,
-            .successful_updated_observed = (state & kIncrementalReciprocalEvidenceUpdated) != 0,
-        };
-    }
-#endif
 
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-    bool ArmThresholdBatch4ExecutionEvidence() {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        EnsureBuildUsable();
-#if defined(INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL)
-        if constexpr (kThresholdBatch4ExecutionEvidenceSupported) {
-            if (data_store_.cur_vec_num() != 0) {
-                throw std::invalid_argument("thresholded Batch4 execution evidence must be armed before insertion");
-            }
-            std::uint32_t expected = 0;
-            return threshold_batch4_execution_evidence_.compare_exchange_strong(expected,
-                                                                                kThresholdBatch4EvidenceArmed,
-                                                                                std::memory_order_release,
-                                                                                std::memory_order_relaxed);
-        }
-#endif
-        return false;
-    }
-
-    HnswThresholdBatch4ExecutionEvidence GetThresholdBatch4ExecutionEvidence() const {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        const std::uint32_t state = threshold_batch4_execution_evidence_.load(std::memory_order_acquire);
-        return {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL)
-            .treatment_compiled = kThresholdBatch4ExecutionEvidenceSupported,
-#else
-            .treatment_compiled = false,
-#endif
-            .capture_armed = (state & kThresholdBatch4EvidenceArmed) != 0,
-            .eligible_branch_entered = (state & kThresholdBatch4EvidenceEligible) != 0,
-            .rejected_lane_observed = (state & kThresholdBatch4EvidenceRejected) != 0,
-            .surviving_lane_observed = (state & kThresholdBatch4EvidenceSurviving) != 0,
-        };
-    }
-
-    HnswThresholdBatch4ExecutionEvidence SealAndGetThresholdBatch4ExecutionEvidence() {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        const std::uint32_t state =
-            threshold_batch4_execution_evidence_.fetch_or(kThresholdBatch4EvidenceSealed, std::memory_order_acq_rel) |
-            kThresholdBatch4EvidenceSealed;
-        return {
-#if defined(INFINITY_ENABLE_APPLE_HNSW_THRESHOLD_BATCH4_TRAVERSAL)
-            .treatment_compiled = kThresholdBatch4ExecutionEvidenceSupported,
-#else
-            .treatment_compiled = false,
-#endif
-            .capture_armed = (state & kThresholdBatch4EvidenceArmed) != 0,
-            .eligible_branch_entered = (state & kThresholdBatch4EvidenceEligible) != 0,
-            .rejected_lane_observed = (state & kThresholdBatch4EvidenceRejected) != 0,
-            .surviving_lane_observed = (state & kThresholdBatch4EvidenceSurviving) != 0,
-        };
-    }
-#endif
-
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) && defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-    void SetIncrementalReciprocalEnabledForTest(bool enabled) {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        ClearAllIncrementalReciprocalCertificates();
-        incremental_reciprocal_enabled_ = enabled;
-    }
-#endif
-
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    struct IncrementalReciprocalCertificateStorageForTest {
-        size_t mask_count{};
-        size_t capacity_bytes{};
-        size_t charged_bytes{};
-    };
-
-    void SetBuildEntryHookForTest(std::function<void(VertexType)> hook) {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        build_entry_hook_ = std::move(hook);
-    }
-
-    void SetConnectivityRepairHookForTest(std::function<void(VertexType, VertexType, bool, bool, bool)> hook) {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        connectivity_repair_hook_ = std::move(hook);
-    }
-
-    void SetAllLevelZeroIncrementalReciprocalCertificatesForTest() {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        PrepareIncrementalReciprocalCertificates();
-        for (size_t vertex = 0; vertex < data_store_.cur_vec_num(); ++vertex) {
-            SetIncrementalReciprocalCertificate(static_cast<VertexType>(vertex), 0);
-        }
-    }
-
-    HnswIncrementalReciprocalStats GetIncrementalReciprocalStats() const {
-        auto load = [&](IncrementalReciprocalCounter counter) {
-            return reciprocal_counters_[static_cast<size_t>(counter)].load(std::memory_order_relaxed);
-        };
-        return HnswIncrementalReciprocalStats{
-            .reciprocal_links = load(IncrementalReciprocalCounter::kReciprocalLinks),
-            .direct_appends = load(IncrementalReciprocalCounter::kDirectAppends),
-            .full_overflows = load(IncrementalReciprocalCounter::kFullOverflows),
-            .certificate_hits = load(IncrementalReciprocalCounter::kCertificateHits),
-            .certificate_misses = load(IncrementalReciprocalCounter::kCertificateMisses),
-            .certificate_sets = load(IncrementalReciprocalCounter::kCertificateSets),
-            .certificate_clears = load(IncrementalReciprocalCounter::kCertificateClears),
-            .unchanged_new_farthest = load(IncrementalReciprocalCounter::kUnchangedNewFarthest),
-            .unchanged_rejected = load(IncrementalReciprocalCounter::kUnchangedRejected),
-            .updated_full = load(IncrementalReciprocalCounter::kUpdatedFull),
-            .updated_underfull = load(IncrementalReciprocalCounter::kUpdatedUnderfull),
-            .fallback_invalid_state = load(IncrementalReciprocalCounter::kFallbackInvalidState),
-            .fallback_scratch_capacity = load(IncrementalReciprocalCounter::kFallbackScratchCapacity),
-            .fallback_duplicate = load(IncrementalReciprocalCounter::kFallbackDuplicate),
-            .fallback_center_tie = load(IncrementalReciprocalCounter::kFallbackCenterTie),
-            .fallback_nonfinite_center = load(IncrementalReciprocalCounter::kFallbackNonfiniteCenter),
-            .fallback_uncertified_order = load(IncrementalReciprocalCounter::kFallbackUncertifiedOrder),
-            .baseline_center_distance_evaluations = load(IncrementalReciprocalCounter::kBaselineCenterDistanceEvaluations),
-            .baseline_pair_distance_evaluations = load(IncrementalReciprocalCounter::kBaselinePairDistanceEvaluations),
-            .incremental_center_distance_evaluations = load(IncrementalReciprocalCounter::kIncrementalCenterDistanceEvaluations),
-            .incremental_pair_distance_evaluations = load(IncrementalReciprocalCounter::kIncrementalPairDistanceEvaluations),
-            .shadow_comparisons = load(IncrementalReciprocalCounter::kShadowComparisons),
-            .shadow_mismatches = load(IncrementalReciprocalCounter::kShadowMismatches),
-            .predicted_avoided_distance_evaluations = load(IncrementalReciprocalCounter::kPredictedAvoidedDistanceEvaluations),
-            .predicted_extra_distance_evaluations = load(IncrementalReciprocalCounter::kPredictedExtraDistanceEvaluations),
-        };
-    }
-
-    size_t GetIncrementalReciprocalLiveCertificateCount() const {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        size_t count = 0;
-        for (std::uint64_t mask : incremental_reciprocal_certificate_masks_) {
-            count += static_cast<size_t>(std::popcount(mask));
-        }
-        return count;
-    }
-
-    IncrementalReciprocalCertificateStorageForTest GetIncrementalReciprocalCertificateStorageForTest() const {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        return {
-            .mask_count = incremental_reciprocal_certificate_masks_.size(),
-            .capacity_bytes = incremental_reciprocal_certificate_masks_.capacity() * sizeof(std::uint64_t),
-            .charged_bytes = incremental_reciprocal_certificate_bytes_.load(std::memory_order_relaxed),
-        };
-    }
-
-    bool HasIncrementalReciprocalCertificateForTest(VertexType vertex, i32 layer) const {
-        auto operation_lock = AcquireExclusiveOperationLock();
-        return IsIncrementalReciprocalCertified(vertex, layer);
-    }
-#endif
 
     LayerSize GetGraphLevel(VertexType vertex) const { return data_store_.GetLevel(vertex); }
 
@@ -1925,31 +1074,12 @@ protected:
     std::mt19937 level_generator_{};
     size_t level_cursor_{};
 
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    std::vector<std::uint64_t> incremental_reciprocal_certificate_masks_;
-    std::atomic<size_t> incremental_reciprocal_certificate_bytes_{};
-    bool incremental_reciprocal_certification_disabled_{};
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) && defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS)
-    bool incremental_reciprocal_enabled_{true};
-#endif
-#endif
 
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_EXECUTION_EVIDENCE)
-    std::atomic<std::uint32_t> incremental_reciprocal_execution_evidence_{};
-#endif
 
-#if defined(INFINITY_ENABLE_HNSW_THRESHOLD_BATCH4_EXECUTION_EVIDENCE)
-    mutable std::atomic<std::uint32_t> threshold_batch4_execution_evidence_{};
-#endif
 
     DataStore data_store_;
     Distance distance_;
 
-#if defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_DIAGNOSTICS) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-    mutable std::array<std::atomic<std::uint64_t>, static_cast<size_t>(IncrementalReciprocalCounter::kCount)> reciprocal_counters_{};
-    std::function<void(VertexType)> build_entry_hook_;
-    std::function<void(VertexType, VertexType, bool, bool, bool)> connectivity_repair_hook_;
-#endif
 
     size_t prefetch_step_;
 
@@ -2069,9 +1199,6 @@ public:
             auto result = std::unique_ptr<CompressedHnsw>(
                 new CompressedHnsw(HnswCompressionTargetTag{}, this->M_, this->ef_construction_, this->data_store_.dim()));
             auto compressed_datastore = std::move(this->data_store_).template CompressToLVQ<CompressLVQVecStoreType>();
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            this->ClearAllIncrementalReciprocalCertificates();
-#endif
             result->InstallCompressedDataStore(std::move(compressed_datastore));
             return result;
         }
@@ -2090,9 +1217,6 @@ public:
             auto result = std::unique_ptr<CompressedHnsw>(
                 new CompressedHnsw(HnswCompressionTargetTag{}, this->M_, this->ef_construction_, this->data_store_.dim()));
             auto compressed_datastore = std::move(this->data_store_).template CompressToRabitq<CompressRabitqVecStoreType>();
-#if defined(INFINITY_ENABLE_APPLE_HNSW_INCREMENTAL_RECIPROCAL) || defined(INFINITY_ENABLE_HNSW_INCREMENTAL_RECIPROCAL_SHADOW)
-            this->ClearAllIncrementalReciprocalCertificates();
-#endif
             result->InstallCompressedDataStore(std::move(compressed_datastore));
             return result;
         }

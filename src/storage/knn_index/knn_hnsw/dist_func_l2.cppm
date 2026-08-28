@@ -19,9 +19,6 @@ import :plain_vec_store;
 import :lvq_vec_store;
 import :rabitq_vec_store;
 import :simd_functions;
-#if defined(INFINITY_ENABLE_HNSW_LVQ_CAPTURE)
-import :hnsw_lvq_capture;
-#endif
 
 import std;
 
@@ -271,13 +268,6 @@ public:
         const StoreType &v2 = data_store.GetVec(v2_i);
         size_t dim = data_store.dim();
         const DistanceType result = Inner(v1, v2, dim);
-#if defined(INFINITY_ENABLE_HNSW_LVQ_CAPTURE)
-        constexpr size_t header_bytes = sizeof(typename VecStoreMetaType::LVQData);
-        const auto *query_record = reinterpret_cast<const std::byte *>(v1->compress_vec_) - header_bytes;
-        const auto *candidate_record = reinterpret_cast<const std::byte *>(v2->compress_vec_) - header_bytes;
-        HnswObserveLvqL2(
-            query_record, candidate_record, header_bytes + dim * sizeof(CompressType), dim, result, v1_i, v2_i);
-#endif
         return result;
     }
 
