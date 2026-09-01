@@ -16,6 +16,17 @@
 
 namespace infinity {
 
-void SIMDPrefetch(const void *ptr);
+// Deliberately defined inline in the header rather than in a .cpp.
+//
+// This lowers to a single arm64 `prfm pldl1keep, [x0]` (or the x86 equivalent). As an
+// out-of-line function it compiled to a two-instruction body reached by `bl`, and the
+// HNSW construction traversal calls it once per neighbour of every popped node
+// (hnsw_alg.cppm SearchLayer prefetch loop, via DataStore::PrefetchVec ->
+// PlainVecStoreInnerBase::Prefetch). On a 1M-vector build that is on the order of 10^10
+// calls to issue one instruction, and the call also denies the compiler any freedom to
+// schedule the prefetch relative to the loads it is meant to cover.
+//
+// `__builtin_prefetch` is a compiler builtin and needs no includes.
+inline void SIMDPrefetch(const void *ptr) { __builtin_prefetch(ptr, 0 /* rw: read */, 3 /* locality: high */); }
 
 } // namespace infinity

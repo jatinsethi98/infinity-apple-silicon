@@ -127,9 +127,11 @@ target_sources(
         "${INFINITY_ROOT}/src/storage/knn_index/knn_hnsw/hnsw_handler.cppm"
         "${INFINITY_ROOT}/src/storage/knn_index/knn_hnsw/hnsw_handler_core_impl.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/hnsw_handler_diagnostic_stubs.cpp"
-    PRIVATE
-        "${CMAKE_CURRENT_LIST_DIR}/simd_prefetch.cpp"
 )
+# simd_prefetch.cpp used to live here to satisfy the SIMDPrefetch reference. It is gone:
+# SIMDPrefetch is now an inline function in src/common/simd/simd_functions.h, so there is
+# nothing to link. It had to be removed in the same change as the header -- keeping either
+# out-of-line definition alongside the inline one is a redefinition error in this TU.
 target_include_directories(
     infinity_native_hnsw
     PRIVATE

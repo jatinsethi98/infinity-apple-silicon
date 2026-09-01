@@ -46,6 +46,91 @@ namespace infinity {
 
 struct HnswCompressionTargetTag {};
 
+// Per-thread visited set for graph traversal.
+//
+// This replaces a `std::vector<bool> visited(cur_vec_num, false)` that used to be
+// constructed on every SearchLayer call. HnswBulkBuild stores every vector before it
+// launches any build task, so cur_vec_num is already the FULL corpus size on every
+// insertion -- not a growing prefix. At n=1M that allocated and zeroed a 125,000-byte
+// bitmap ~1.03M times over a build: ~129 GB of zeroing plus ~1.03M malloc/free pairs, to
+// serve a traversal that touches at most ~ef*M distinct ids.
+//
+// Instead each thread keeps one stamp buffer and a monotonically increasing epoch. A
+// vertex counts as visited iff its stamp equals the current epoch, so Begin() is O(1)
+// except on epoch wraparound, which clears once every numeric_limits<Stamp>::max()
+// traversals. Same idea as FAISS's VisitedTable.
+//
+// MUST be thread-local: SearchLayer runs concurrently on every build worker
+// (hnsw_bulk_build.cppm). Sizing from the caller's cur_vec_num snapshot preserves exactly
+// the previous semantics -- SearchLayer's `n_idx >= cur_vec_num` guards remain the sole
+// bound, and vertices appended by another thread after the snapshot stay invisible to this
+// call, as they already were.
+class HnswVisitedSet {
+public:
+    // u16 rather than u8 deliberately. At n=1M a u8 stamp wraps every 255 traversals and
+    // so pays ~4,000 full 1 MB clears across a build (~4 GB); u16 wraps ~15 times (~30 MB)
+    // for 2 MB per thread, i.e. 24 MB across 12 workers on a 36 GB machine. Narrowing this
+    // to u8 halves the table's cache footprint at the cost of that clearing, and is the one
+    // knob here worth re-measuring.
+    using Stamp = std::uint16_t;
+
+    // Start a traversal over [0, count). Grows without shrinking, so a thread that has
+    // already served a larger index keeps its buffer.
+    void Begin(std::size_t count) {
+        if (stamps_.size() < count) {
+            stamps_.resize(count, Stamp{0});
+        }
+        if (epoch_ == std::numeric_limits<Stamp>::max()) {
+            std::fill(stamps_.begin(), stamps_.end(), Stamp{0});
+            epoch_ = 1;
+        } else {
+            ++epoch_;
+        }
+        // epoch_ is now >= 1, and 0 is never a live epoch, so both a freshly grown region
+        // and a freshly cleared table read as unvisited.
+    }
+
+    // Returns whether `index` was already visited this traversal, and marks it either way.
+    // Callers must have bounds-checked `index` against the count passed to Begin().
+    bool TestAndMark(std::size_t index) {
+        if (stamps_[index] == epoch_) {
+            return true;
+        }
+        stamps_[index] = epoch_;
+        return false;
+    }
+
+    void Mark(std::size_t index) { stamps_[index] = epoch_; }
+
+private:
+    std::vector<Stamp> stamps_;
+    Stamp epoch_{0};
+};
+
+// One object per thread for the whole program, reached through a non-template accessor.
+//
+// Two constraints force exactly this shape:
+//
+//  * NOT a function-local static inside SearchLayer. SearchLayer is a template member of a
+//    class template, so a thread_local declared inside it would give one buffer per
+//    instantiation (WithLock x Filter x ColumnLogicalType x the class-template matrix)
+//    rather than one per thread.
+//  * NOT a namespace-scope `thread_local` variable either, however natural that looks.
+//    Clang 20 emits the "thread-local wrapper routine" for a module-linkage thread_local
+//    as a strong definition in EVERY translation unit that imports the module, so it fails
+//    to link with a duplicate symbol. Verified: `duplicate symbol 'thread-local wrapper
+//    routine for infinity::g_hnsw_visited_set@infinity_core'` in both harness executables.
+//
+// A non-inline function with a function-local `static thread_local` is defined in this one
+// TU, so importers merely reference it. Keep it non-inline for that reason. It is called
+// once per SearchLayer, not per neighbour, so the TLS access and guard check are noise.
+//
+// The connectivity-repair traversal elsewhere in this file keeps its own local visited
+// vector; it runs once, outside the hot path, and must stay independent of this one.
+HnswVisitedSet &HnswThreadVisitedSet() {
+    static thread_local HnswVisitedSet visited;
+    return visited;
+}
 
 export struct KnnSearchOption {
     size_t ef_ = 0;
@@ -222,7 +307,19 @@ protected:
                 static_assert(false, "Unsupported column logical type");
             }
         };
-        DistHeap candidate;
+        // std::priority_queue has no reserve(), so pre-size its backing vector and move it
+        // in via the (Compare, Container&&) constructor. The moved-in vector is empty, so
+        // the implicit make_heap over an empty range is a no-op.
+        //
+        // result_n is a HEURISTIC initial capacity, not a bound: commit_candidate admits on
+        // `dist <= worst` while the loop terminates on strict `>`, so a graph with many
+        // equal distances can grow the frontier well past result_n. This just removes the
+        // early doubling steps for the common case.
+        DistHeap candidate = [result_n] {
+            std::vector<PDV> storage;
+            storage.reserve(result_n);
+            return DistHeap(CMP{}, std::move(storage));
+        }();
 
         data_store_.PrefetchVec(enter_point);
         // enter_point will not be added to result_handler, the distance is not used
@@ -233,8 +330,9 @@ protected:
         }
 
         size_t cur_vec_num = data_store_.cur_vec_num();
-        std::vector<bool> visited(cur_vec_num, false);
-        visited[enter_point] = true;
+        HnswVisitedSet &visited = HnswThreadVisitedSet();
+        visited.Begin(cur_vec_num);
+        visited.Mark(enter_point);
         auto commit_candidate = [&](DistanceType dist, VertexType vertex) {
             if (result_handler.GetSize(0) < result_n || dist <= result_handler.GetDistance0(0)) {
                 candidate.emplace(-dist, vertex);
@@ -263,10 +361,11 @@ protected:
                         data_store_.PrefetchVec(neighbors_p[prefetch_start++]);
                     }
                     VertexType n_idx = neighbors_p[i];
-                    if (n_idx >= (VertexType)cur_vec_num || visited[n_idx]) {
+                    // Short-circuit order matters: the range check must precede TestAndMark,
+                    // which indexes the table unchecked.
+                    if (n_idx >= (VertexType)cur_vec_num || visited.TestAndMark(n_idx)) {
                         continue;
                     }
-                    visited[n_idx] = true;
                     commit_candidate(distance_(query, n_idx, data_store_, query_i), n_idx);
                 }
             };
@@ -284,10 +383,9 @@ protected:
                             data_store_.PrefetchVec(neighbors_p[prefetch_start++]);
                         }
                         const VertexType n_idx = neighbors_p[i];
-                        if (n_idx >= (VertexType)cur_vec_num || visited[n_idx]) {
+                        if (n_idx >= (VertexType)cur_vec_num || visited.TestAndMark(n_idx)) {
                             continue;
                         }
-                        visited[n_idx] = true;
                         pending_vertices[pending_count++] = n_idx;
                         if (pending_count == pending_vertices.size()) {
                             bool threshold_path_ran = false;
