@@ -1073,6 +1073,29 @@ void PrintResult(HnswD0Engine engine,
     std::cout << engine_name << "_self_recall_at_1=" << result.self_recall_at_1 << '\n';
     std::cout << engine_name << "_distance_checksum=" << result.distance_checksum << '\n';
     std::cout << engine_name << "_query_latency_sample_count=" << result.query_benchmark.latency_samples_ns.size() << '\n';
+    // Latency percentiles. The raw samples only reach the binary audit sidecar, so
+    // emit the summary here too -- otherwise query latency cannot be compared from
+    // stdout at all. Nearest-rank, matching query_percentile_method above.
+    if (!result.query_benchmark.latency_samples_ns.empty()) {
+        std::vector<std::uint64_t> sorted_latencies = result.query_benchmark.latency_samples_ns;
+        std::sort(sorted_latencies.begin(), sorted_latencies.end());
+        const auto nearest_rank = [&sorted_latencies](double quantile) {
+            const std::size_t count = sorted_latencies.size();
+            std::size_t rank = static_cast<std::size_t>(std::ceil(quantile * static_cast<double>(count)));
+            if (rank == 0) {
+                rank = 1;
+            }
+            if (rank > count) {
+                rank = count;
+            }
+            return sorted_latencies[rank - 1];
+        };
+        std::cout << engine_name << "_query_latency_p50_ns=" << nearest_rank(0.50) << '\n';
+        std::cout << engine_name << "_query_latency_p95_ns=" << nearest_rank(0.95) << '\n';
+        std::cout << engine_name << "_query_latency_p99_ns=" << nearest_rank(0.99) << '\n';
+        std::cout << engine_name << "_query_latency_min_ns=" << sorted_latencies.front() << '\n';
+        std::cout << engine_name << "_query_latency_max_ns=" << sorted_latencies.back() << '\n';
+    }
     std::cout << engine_name << "_query_latency_validated_operations=" << result.query_benchmark.latency_validated_operations << '\n';
     std::cout << engine_name << "_query_latency_validated_result_checksum="
               << result.query_benchmark.latency_validated_result_checksum << '\n';

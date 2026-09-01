@@ -11,6 +11,41 @@ export struct HnswBulkBuildResult {
     std::size_t submitted_task_count_{};
 };
 
+// Default number of build tasks handed to each pool worker.
+//
+// One task per worker looks natural but balances badly. Inserting a vertex costs
+// more as the graph grows, and contiguous ranges give the last worker the newest
+// vertices, so it does far more work than the first. Profiling a 100k x 128 build
+// on 12 workers measured per-worker active samples of
+// 3386 3354 3385 3726 4353 4546 4797 5065 5208 5479 5843 6222 -- monotonically
+// increasing, with the last worker doing 1.84x the first and only 74% of
+// worker-time useful.
+//
+// Cutting the range into several tasks per worker lets the pool's shared queue
+// hand out the expensive tail across all workers, since each worker pulls another
+// task as soon as it finishes one. kHnswBuildBucketsPerWorker trades scheduling
+// granularity against per-task overhead; the minimum bucket size below keeps tasks
+// from becoming too small to be worth submitting.
+export constexpr std::size_t kHnswBuildBucketsPerWorker = 8;
+
+// Vertices per build task. Shared by the builder and by callers that need to
+// predict the task count, so the two can never disagree.
+export constexpr std::size_t HnswBuildBucketSize(std::size_t stored_count,
+                                                 std::size_t worker_count,
+                                                 std::size_t minimum_bucket_size,
+                                                 std::size_t buckets_per_worker = kHnswBuildBucketsPerWorker) {
+    if (stored_count == 0 || worker_count == 0) {
+        return std::max<std::size_t>(minimum_bucket_size, 1);
+    }
+    // Cap the requested granularity so worker_count * buckets_per_worker cannot
+    // overflow, and so a caller cannot ask for more tasks than there are vertices.
+    const std::size_t requested = std::max<std::size_t>(buckets_per_worker, 1);
+    const std::size_t affordable = std::max<std::size_t>(stored_count / worker_count, 1);
+    const std::size_t target_bucket_count = worker_count * std::min(requested, affordable);
+    const std::size_t balanced_bucket_size = (stored_count - 1) / target_bucket_count + 1;
+    return std::max<std::size_t>({minimum_bucket_size, balanced_bucket_size, 1});
+}
+
 template <typename ThreadPool, typename BuildVertex, typename OnSubmissionFailure>
 std::size_t HnswRunBuildTasks(ThreadPool &thread_pool,
                               std::size_t start,
@@ -140,7 +175,8 @@ HnswBulkBuildResult HnswBulkBuildRun(IndexPtr &index,
                                      Iter &&iter,
                                      const Config &config,
                                      ThreadPool &thread_pool,
-                                     std::size_t minimum_bucket_size) {
+                                     std::size_t minimum_bucket_size,
+                                     std::size_t buckets_per_worker) {
     try {
         const std::size_t mem_before = index->mem_usage();
         const auto [start, end] = Operations::Store(index, std::forward<Iter>(iter), config);
@@ -157,7 +193,8 @@ HnswBulkBuildResult HnswBulkBuildRun(IndexPtr &index,
             };
         }
 
-        const std::size_t bucket_size = std::max(minimum_bucket_size, (stored_count - 1) / std::size_t(thread_pool.size()) + 1);
+        const std::size_t bucket_size =
+            HnswBuildBucketSize(stored_count, std::size_t(thread_pool.size()), minimum_bucket_size, buckets_per_worker);
         auto *const index_ptr = index.get();
         const auto mark_submission_failure = [index_ptr]() noexcept {
             static_cast<void>(index_ptr);
@@ -207,7 +244,12 @@ HnswBulkBuildResult HnswBulkBuildRun(IndexPtr &index,
 
 export template <typename IndexPtr, typename Iter, typename Config, typename ThreadPool>
 HnswBulkBuildResult
-HnswBulkBuild(IndexPtr &index, Iter &&iter, const Config &config, ThreadPool &thread_pool, std::size_t minimum_bucket_size = 1024) {
+HnswBulkBuild(IndexPtr &index,
+              Iter &&iter,
+              const Config &config,
+              ThreadPool &thread_pool,
+              std::size_t minimum_bucket_size = 1024,
+              std::size_t buckets_per_worker = kHnswBuildBucketsPerWorker) {
     if (thread_pool.size() <= 0) {
         throw std::invalid_argument("HNSW bulk build requires a non-empty thread pool");
     }
@@ -229,9 +271,10 @@ HnswBulkBuild(IndexPtr &index, Iter &&iter, const Config &config, ThreadPool &th
         }
         index->EnsureAllVerticesBuiltWithOperationLockHeld();
         return HnswBulkBuildRun<HnswHeldLockOperations>(
-            index, std::forward<Iter>(iter), config, thread_pool, minimum_bucket_size);
+            index, std::forward<Iter>(iter), config, thread_pool, minimum_bucket_size, buckets_per_worker);
     } else {
-        return HnswBulkBuildRun<HnswPublicOperations>(index, std::forward<Iter>(iter), config, thread_pool, minimum_bucket_size);
+        return HnswBulkBuildRun<HnswPublicOperations>(
+            index, std::forward<Iter>(iter), config, thread_pool, minimum_bucket_size, buckets_per_worker);
     }
 }
 

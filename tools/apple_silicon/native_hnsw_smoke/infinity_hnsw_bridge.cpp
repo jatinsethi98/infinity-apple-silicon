@@ -37,14 +37,39 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
         HNSW_D0_TIMING_PROBE(kExecutionWitnessArmBegin);
         HNSW_D0_TIMING_PROBE(kExecutionWitnessArmEnd);
         infinity::DenseVectorIter<float, Label> iterator(data, dimension, vector_count);
+        // Dev-harness sweep knob for build-task granularity. Unset uses the library
+        // default (kHnswBuildBucketsPerWorker), so a plain run measures shipping
+        // behaviour. Reading it here rather than baking it in lets one binary A/B
+        // several granularities, which keeps codegen out of the comparison.
+        const std::size_t buckets_per_worker = [] {
+            const char *raw = std::getenv("INFINITY_HNSW_BUILD_BUCKETS_PER_WORKER");
+            if (raw == nullptr) {
+                return infinity::kHnswBuildBucketsPerWorker;
+            }
+            char *parse_end = nullptr;
+            const unsigned long long parsed = std::strtoull(raw, &parse_end, 10);
+            if (parse_end == raw || *parse_end != '\0' || parsed == 0 || parsed > 4096) {
+                return infinity::kHnswBuildBucketsPerWorker;
+            }
+            return static_cast<std::size_t>(parsed);
+        }();
+        std::cout << "infinity_build_buckets_per_worker=" << buckets_per_worker << '\n';
+
         const auto insert_begin = HNSW_D0_READ_STEADY_CLOCK(kBuildEntered);
         const infinity::HnswBulkBuildResult build_result =
-            config->build_grain == 0 ? infinity::HnswBulkBuild(index, std::move(iterator), infinity::HnswInsertConfig{.optimize_ = true}, build_pool)
-                                     : infinity::HnswBulkBuild(index,
-                                                               std::move(iterator),
-                                                               infinity::HnswInsertConfig{.optimize_ = true},
-                                                               build_pool,
-                                                               static_cast<size_t>(config->build_grain));
+            config->build_grain == 0
+                ? infinity::HnswBulkBuild(index,
+                                          std::move(iterator),
+                                          infinity::HnswInsertConfig{.optimize_ = true},
+                                          build_pool,
+                                          size_t{1024},
+                                          buckets_per_worker)
+                : infinity::HnswBulkBuild(index,
+                                          std::move(iterator),
+                                          infinity::HnswInsertConfig{.optimize_ = true},
+                                          build_pool,
+                                          static_cast<size_t>(config->build_grain),
+                                          buckets_per_worker);
         HNSW_D0_TIMING_PROBE(kBuildReturned);
         const auto insert_end = HNSW_D0_READ_STEADY_CLOCK(kTimerStopped);
         HNSW_D0_TIMING_PROBE(kExecutionWitnessSealBegin);
@@ -129,8 +154,11 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
         const size_t minimum_bucket_size = config->build_grain == 0 ? size_t{1024} : static_cast<size_t>(config->build_grain);
         size_t expected_task_count = 0;
         if (result->thread_count > 0) {
-            const size_t average_bucket_size = (vector_count - 1) / static_cast<size_t>(result->thread_count) + 1;
-            const size_t bucket_size = std::max(minimum_bucket_size, average_bucket_size);
+            // Use the builder's own helper so this prediction cannot drift from it.
+            const size_t bucket_size = infinity::HnswBuildBucketSize(vector_count,
+                                                                     static_cast<size_t>(result->thread_count),
+                                                                     minimum_bucket_size,
+                                                                     buckets_per_worker);
             expected_task_count = (vector_count - 1) / bucket_size + 1;
         }
         result->valid = build_result.mem_usage_ > 0 && result->build_start == 0 && result->build_end == vector_count &&

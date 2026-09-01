@@ -197,6 +197,14 @@ def run_engine(binary, engine, args, sidecar_path):
         if key in kv:
             recall[ef] = float(kv[key])
 
+    # Query side. Throughput is measured with kHnswD0QueryThroughputConcurrency
+    # threads issuing queries; latency percentiles are measured one query at a time.
+    # Both engines run the same harness constants (ef=256, k=10), so they compare.
+    throughput_ops = g("query_throughput_operations", int)
+    throughput_wall_ns = g("query_throughput_wall_ns", int)
+    qps = (throughput_ops / (throughput_wall_ns / 1e9)
+           if throughput_ops and throughput_wall_ns else None)
+
     ok = (returncode == 0 and kv.get("status") == "PASS"
           and g("valid", int) == 1 and build_ns is not None)
     return {
@@ -217,6 +225,17 @@ def run_engine(binary, engine, args, sidecar_path):
         "graph_level0_capacity": g("graph_level0_capacity", int),
         "graph_upper_capacity": g("graph_upper_capacity", int),
         "graph_level_histogram": kv.get(prefix + "graph_level_histogram"),
+        "qps": qps,
+        "query_throughput_operations": throughput_ops,
+        "query_throughput_wall_ns": throughput_wall_ns,
+        "query_latency_p50_ns": g("query_latency_p50_ns", int),
+        "query_latency_p95_ns": g("query_latency_p95_ns", int),
+        "query_latency_p99_ns": g("query_latency_p99_ns", int),
+        "query_throughput_concurrency": g("query_throughput_concurrency", int)
+                                        or (int(kv["query_throughput_concurrency"])
+                                            if "query_throughput_concurrency" in kv else None),
+        "build_buckets_per_worker": g("build_buckets_per_worker", int),
+        "submitted_tasks": g("submitted_tasks", int),
         "stdout": stdout,
         "stderr": stderr,
         "timed_out": False,
@@ -226,6 +245,12 @@ def run_engine(binary, engine, args, sidecar_path):
 # --------------------------------------------------------------------------- #
 # stats
 # --------------------------------------------------------------------------- #
+def _med(values):
+    """Median of the non-None values, or None when there are none."""
+    present = [v for v in values if v is not None]
+    return statistics.median(present) if present else None
+
+
 def spread(samples):
     """median, min, max, relative MAD (median abs deviation / median)."""
     if not samples:
@@ -239,9 +264,15 @@ def spread(samples):
 
 
 def fmt_ns(ns):
+    """Human-readable duration. Query latencies are sub-millisecond, so keep
+    microsecond resolution below 1 ms instead of rounding everything to 0.2 ms."""
     if ns is None:
         return "n/a"
-    return f"{ns/1e6:.1f} ms" if ns < 1e9 else f"{ns/1e9:.3f} s"
+    if ns < 1e6:
+        return f"{ns/1e3:.0f} us"
+    if ns < 1e9:
+        return f"{ns/1e6:.1f} ms"
+    return f"{ns/1e9:.3f} s"
 
 
 # --------------------------------------------------------------------------- #
@@ -344,6 +375,7 @@ def main():
             recall_by_ef[ef] = statistics.median(vals) if vals else None
         sp = spread(build_samples)
         vps = (args.n / (sp["median"] / 1e9)) if sp["median"] else None
+        qps_spread = spread([r["qps"] for r in er if r.get("qps")])
         agg[eng] = {
             "ok_runs": len(er),
             "build_ns": sp,
@@ -353,6 +385,13 @@ def main():
             "graph_directed_edges": er[0]["graph_directed_edges"] if er else None,
             "graph_level0_capacity": er[0]["graph_level0_capacity"] if er else None,
             "graph_upper_capacity": er[0]["graph_upper_capacity"] if er else None,
+            "qps": qps_spread,
+            "query_latency_p50_ns": _med([r.get("query_latency_p50_ns") for r in er]),
+            "query_latency_p95_ns": _med([r.get("query_latency_p95_ns") for r in er]),
+            "query_latency_p99_ns": _med([r.get("query_latency_p99_ns") for r in er]),
+            "query_throughput_concurrency": er[0].get("query_throughput_concurrency") if er else None,
+            "build_buckets_per_worker": er[0].get("build_buckets_per_worker") if er else None,
+            "submitted_tasks": er[0].get("submitted_tasks") if er else None,
         }
 
     # recall-parity gate
@@ -388,6 +427,9 @@ def main():
         "aggregate": agg,
         "recall_gate": gate,
         "build_time_ratio_infinity_over_faiss": ratio,
+        "qps_ratio_infinity_over_faiss": (
+            agg["infinity"]["qps"]["median"] / agg["faiss"]["qps"]["median"]
+            if agg["infinity"]["qps"]["median"] and agg["faiss"]["qps"]["median"] else None),
         "all_runs_ok": all_ok,
         "build_timing_used_wall_clock_fallback": wall_fallback,
     }
@@ -401,8 +443,11 @@ def main():
 def print_report(args, agg, gate, ratio, all_ok, wall_fallback, run_dir):
     inf, fai = agg["infinity"], agg["faiss"]
     print("\n" + "#" * 72)
+    bpw = inf.get("build_buckets_per_worker")
+    tasks = inf.get("submitted_tasks")
+    sched = f" buckets/worker={bpw} tasks={tasks}" if bpw is not None else ""
     print(f"# BASELINE RESULT  (n={args.n} d={args.d} M={args.m} efC={args.efc} "
-          f"threads={args.participants} pairs={args.pairs})")
+          f"threads={args.participants} pairs={args.pairs}{sched})")
     print("#" * 72 + "\n")
 
     print("## Build timing (median of paired runs)\n")
@@ -432,6 +477,25 @@ def print_report(args, agg, gate, ratio, all_ok, wall_fallback, run_dir):
               f"{('%.4f' % ii) if ii is not None else 'n/a'} | "
               f"{('%+.4f' % dfc) if dfc is not None else 'n/a'} | {gate_s} |")
     print(f"\n**Recall-parity gate: {'PASS' if gate['pass'] else 'FAIL -> RECALL-UNMATCHED'}**")
+
+    qps_ratio = None
+    if inf["qps"]["median"] and fai["qps"]["median"]:
+        qps_ratio = inf["qps"]["median"] / fai["qps"]["median"]
+    conc = inf.get("query_throughput_concurrency") or fai.get("query_throughput_concurrency")
+    print(f"\n## Query performance (k=10, efSearch=256, throughput at {conc} concurrent threads,\n"
+          "   latency measured one query at a time; identical harness constants for both engines)\n")
+    print("| engine | QPS (median) | QPS min | QPS max | p50 latency | p95 | p99 |")
+    print("|--------|-------------:|--------:|--------:|------------:|----:|----:|")
+    for name, a in (("Infinity", inf), ("FAISS", fai)):
+        q = a["qps"]
+        print(f"| {name} | {('%.0f' % q['median']) if q['median'] else 'n/a'} | "
+              f"{('%.0f' % q['min']) if q['min'] else 'n/a'} | "
+              f"{('%.0f' % q['max']) if q['max'] else 'n/a'} | "
+              f"{fmt_ns(a['query_latency_p50_ns'])} | {fmt_ns(a['query_latency_p95_ns'])} | "
+              f"{fmt_ns(a['query_latency_p99_ns'])} |")
+    if qps_ratio is not None:
+        print(f"\n**QPS ratio Infinity/FAISS = {qps_ratio:.3f}x**  (>1 means Infinity serves "
+              "more queries/sec)")
 
     print("\n## Graph audit (single representative run)\n")
     print("| engine | directed edges | level0 capacity | upper capacity |")
