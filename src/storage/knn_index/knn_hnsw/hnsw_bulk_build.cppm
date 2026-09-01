@@ -13,20 +13,37 @@ export struct HnswBulkBuildResult {
 
 // Default number of build tasks handed to each pool worker.
 //
-// One task per worker looks natural but balances badly. Inserting a vertex costs
-// more as the graph grows, and contiguous ranges give the last worker the newest
-// vertices, so it does far more work than the first. Profiling a 100k x 128 build
-// on 12 workers measured per-worker active samples of
+// Inserting a vertex costs more as the graph grows, so with one contiguous bucket
+// per worker the worker holding the newest vertices does the most work. A profile
+// of a 100k x 128 build on 12 workers measured per-worker active samples of
 // 3386 3354 3385 3726 4353 4546 4797 5065 5208 5479 5843 6222 -- monotonically
-// increasing, with the last worker doing 1.84x the first and only 74% of
-// worker-time useful.
+// increasing, 1.84x from first to last. That looked like a scheduling problem
+// worth fixing. Measurement says otherwise; see below.
 //
 // Cutting the range into several tasks per worker lets the pool's shared queue
 // hand out the expensive tail across all workers, since each worker pulls another
-// task as soon as it finishes one. kHnswBuildBucketsPerWorker trades scheduling
-// granularity against per-task overhead; the minimum bucket size below keeps tasks
-// from becoming too small to be worth submitting.
-export constexpr std::size_t kHnswBuildBucketsPerWorker = 8;
+// task as soon as it finishes one.
+//
+// MEASURED, and the reason the default is 1: this recovers almost nothing. On
+// SIFT1M (1M x 128, M=32, efC=200, 12 threads, AC power, 6 paired runs per arm)
+// the median build moved 49.879 s -> 49.424 s, a 1.009x gain. The 74.15%
+// "occupancy" in the profile was sampled active-stack share, not CPU utilization:
+// a worker that finishes early stops accruing samples, so the 3386..6222 ramp
+// measures work done, not time spent idle. There was no 26% of wasted time to
+// reclaim. A thread sweep confirms the build is compute-bound and already scales
+// well -- 3 -> 6 threads is 1.816x (91% of linear) and 6 -> 12 is 1.319x against a
+// 1.54x ceiling for adding 6 efficiency cores to 6 performance cores.
+//
+// What it does change is graph quality, by altering how insertions interleave
+// across workers. At 8 buckets/worker, recall@10 shifts materially and in both
+// directions (6 paired runs, medians): ef32 0.7633 -> 0.7352, ef64 0.8070 ->
+// 0.8008, ef128 0.8344 -> 0.8617, ef256 0.8922 -> 0.9422, ef512 0.9461 -> 0.9828.
+// Better above ef128, worse below it. That is a real accuracy trade, not noise,
+// and a 1% build gain does not justify making it silently -- so the shipping
+// default preserves the previous one-bucket-per-worker behaviour and the trade is
+// left to a deliberate, properly powered recall study. Raise this (or pass
+// buckets_per_worker explicitly) to opt in.
+export constexpr std::size_t kHnswBuildBucketsPerWorker = 1;
 
 // Vertices per build task. Shared by the builder and by callers that need to
 // predict the task count, so the two can never disagree.

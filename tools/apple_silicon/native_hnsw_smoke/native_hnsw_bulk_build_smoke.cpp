@@ -19,9 +19,15 @@ constexpr std::size_t kParticipantCount = 12;
 // count: keeping 12,288 vectors keeps the smoke fast, and the scheduling path is the
 // thing under test, not the scale.
 constexpr std::size_t kMinimumBucketSize = 128;
+// Opt in explicitly rather than relying on kHnswBuildBucketsPerWorker, whose
+// shipping default is 1. This smoke exists to cover the multi-bucket scheduling
+// path, so it must request it regardless of what the default happens to be.
+constexpr std::size_t kBucketsPerWorker = 8;
 // Derived from the builder's own helper so it cannot drift from the real formula.
 constexpr std::size_t kExpectedTaskCount =
-    (kVectorCount - 1) / infinity::HnswBuildBucketSize(kVectorCount, kParticipantCount, kMinimumBucketSize) + 1;
+    (kVectorCount - 1)
+        / infinity::HnswBuildBucketSize(kVectorCount, kParticipantCount, kMinimumBucketSize, kBucketsPerWorker)
+    + 1;
 static_assert(kExpectedTaskCount > kParticipantCount, "smoke must exercise more than one bucket per worker");
 constexpr std::size_t kQueryCount = 1'000;
 constexpr double kMinimumSelfRecall = 0.95;
@@ -50,7 +56,7 @@ int main() {
     infinity::DenseVectorIter<float, Label> iterator(data.data(), kDimension, kVectorCount);
     const auto bulk_begin = std::chrono::steady_clock::now();
     const infinity::HnswBulkBuildResult build_result =
-        infinity::HnswBulkBuild(index, std::move(iterator), infinity::HnswInsertConfig{.optimize_ = true}, build_pool, kMinimumBucketSize);
+        infinity::HnswBulkBuild(index, std::move(iterator), infinity::HnswInsertConfig{.optimize_ = true}, build_pool, kMinimumBucketSize, kBucketsPerWorker);
     const auto bulk_end = std::chrono::steady_clock::now();
 
     index->Check();
