@@ -33,6 +33,32 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
         const auto cold_begin = HNSW_D0_READ_STEADY_CLOCK(kTimerStarted);
         infinity::ctpl::thread_pool build_pool(config->participant_count);
         auto index = Hnsw::Make(chunk_size, max_chunk_count, dimension, static_cast<size_t>(config->m), static_cast<size_t>(config->ef_construction));
+        // Two graph-shape sweep knobs, read here rather than baked in so one binary can run
+        // every arm and codegen stays out of the comparison -- same rationale as the build
+        // granularity knob below. Both default to the library's historical behaviour, so an
+        // unset environment measures shipping behaviour and reproduces the determinism gate.
+        const float prune_headroom = [] {
+            const char *raw = std::getenv("INFINITY_HNSW_PRUNE_HEADROOM");
+            if (raw == nullptr) {
+                return 0.0F;
+            }
+            char *parse_end = nullptr;
+            const double parsed = std::strtod(raw, &parse_end);
+            if (parse_end == raw || *parse_end != '\0' || !(parsed >= 0.0) || parsed > 0.5) {
+                return 0.0F;
+            }
+            return static_cast<float>(parsed);
+        }();
+        const bool level0_double_budget = [] {
+            const char *raw = std::getenv("INFINITY_HNSW_LEVEL0_DOUBLE_BUDGET");
+            return raw != nullptr && std::strcmp(raw, "1") == 0;
+        }();
+        index->SetPruneHeadroom(prune_headroom);
+        index->SetLevel0DoubleBudget(level0_double_budget);
+        // Echo what was actually applied, not what was requested: SetPruneHeadroom clamps, so
+        // a run's record must come from the index or it can disagree with the graph produced.
+        std::cout << "infinity_prune_headroom=" << index->GetPruneHeadroom() << '\n';
+        std::cout << "infinity_level0_double_budget=" << (index->GetLevel0DoubleBudget() ? 1 : 0) << '\n';
         HNSW_D0_TIMING_PROBE(kIndexReady);
         HNSW_D0_TIMING_PROBE(kExecutionWitnessArmBegin);
         HNSW_D0_TIMING_PROBE(kExecutionWitnessArmEnd);

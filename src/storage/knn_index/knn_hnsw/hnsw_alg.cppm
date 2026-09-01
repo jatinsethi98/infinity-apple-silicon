@@ -46,122 +46,14 @@ namespace infinity {
 
 struct HnswCompressionTargetTag {};
 
-// Per-thread visited set for graph traversal.
-//
-// This replaces a `std::vector<bool> visited(cur_vec_num, false)` that used to be
-// constructed on every SearchLayer call. HnswBulkBuild stores every vector before it
-// launches any build task, so cur_vec_num is already the FULL corpus size on every
-// insertion -- not a growing prefix. At n=1M that allocated and zeroed a 125,000-byte
-// bitmap ~1.03M times over a build: ~129 GB of zeroing plus ~1.03M malloc/free pairs, to
-// serve a traversal that touches at most ~ef*M distinct ids -- thousands, not a million.
-//
-// Instead each thread keeps ONE bitmap for the whole program, and undoes it after each
-// traversal by clearing only the words it actually set.
-//
-// Staying bit-packed is the whole point, and is a correction of an earlier version of this
-// class that used a one-stamp-per-vertex byte/short table (the shape FAISS's VisitedTable
-// and hnswlib's VisitedList use). That measured 5-9% SLOWER than the std::vector<bool> it
-// replaced, and the reason is footprint, not instruction count:
-//
-//   * bit-packed, n=1M: 125,000 bytes -- fits inside one M3 P-core's 128 KB L1d, and
-//     12 workers together occupy 1.5 MB of the 16 MB shared L2.
-//   * u16 stamps, n=1M: 2 MB per thread, so 24 MB across 12 workers -- overflows the
-//     shared L2 outright.
-//
-// A build performs on the order of 10^10 visited-checks against this structure but only
-// ~10^6 traversal resets, so the resets are not what to optimise for: any win from a
-// cheaper reset is dwarfed by moving the checks from L1 to L2/DRAM. The stamp table buys
-// an O(1) reset and loses far more on every access.
-//
-// So: keep the cache-resident representation, and make the reset proportional to work done
-// rather than to n by remembering which words were dirtied. A traversal marks at most
-// ~ef*M distinct ids -- thousands, against a million-entry table -- so the undo list is
-// short and sequential.
-//
-// MUST be thread-local: SearchLayer runs concurrently on every build worker
-// (hnsw_bulk_build.cppm). Sizing from the caller's cur_vec_num snapshot preserves exactly
-// the previous semantics -- SearchLayer's `n_idx >= cur_vec_num` guards remain the sole
-// bound, and vertices appended by another thread after the snapshot stay invisible to this
-// call, as they already were.
-class HnswVisitedSet {
-public:
-    // Start a traversal over [0, count). Grows without shrinking, so a thread that has
-    // already served a larger index keeps its buffer.
-    void Begin(std::size_t count) {
-        const std::size_t needed = WordsFor(count);
-        if (words_.size() < needed) {
-            words_.resize(needed, Word{0});
-        }
-        // Zero every word that the previous traversal dirtied. Clearing the whole word
-        // rather than the individual bit is both cheaper and safe: every set bit was
-        // recorded here, so every dirty word is visited, and zeroing one twice is a no-op.
-        // That makes this correct without de-duplicating the list.
-        for (const std::uint32_t index : dirty_) {
-            words_[index >> kWordShift] = Word{0};
-        }
-        dirty_.clear();
-    }
-
-    // Returns whether `index` was already visited this traversal, and marks it either way.
-    // Callers must have bounds-checked `index` against the count passed to Begin().
-    bool TestAndMark(std::size_t index) {
-        Word &word = words_[index >> kWordShift];
-        const Word bit = Word{1} << (index & kBitMask);
-        if ((word & bit) != Word{0}) {
-            return true;
-        }
-        word |= bit;
-        dirty_.push_back(static_cast<std::uint32_t>(index));
-        return false;
-    }
-
-    void Mark(std::size_t index) {
-        Word &word = words_[index >> kWordShift];
-        const Word bit = Word{1} << (index & kBitMask);
-        if ((word & bit) == Word{0}) {
-            word |= bit;
-            dirty_.push_back(static_cast<std::uint32_t>(index));
-        }
-    }
-
-private:
-    using Word = std::uint64_t;
-    static constexpr std::size_t kWordShift = 6; // 64 bits per word
-    static constexpr std::size_t kBitMask = 63;
-
-    static std::size_t WordsFor(std::size_t count) { return (count + kBitMask) >> kWordShift; }
-
-    std::vector<Word> words_;
-    // u32 because vertex ids are int32 throughout this file, so 4 bytes suffice and the
-    // list stays half the size an 8-byte index would make it -- it shares L1 with the
-    // bitmap, so its footprint is not incidental.
-    std::vector<std::uint32_t> dirty_;
-};
-
-// One object per thread for the whole program, reached through a non-template accessor.
-//
-// Two constraints force exactly this shape:
-//
-//  * NOT a function-local static inside SearchLayer. SearchLayer is a template member of a
-//    class template, so a thread_local declared inside it would give one buffer per
-//    instantiation (WithLock x Filter x ColumnLogicalType x the class-template matrix)
-//    rather than one per thread.
-//  * NOT a namespace-scope `thread_local` variable either, however natural that looks.
-//    Clang 20 emits the "thread-local wrapper routine" for a module-linkage thread_local
-//    as a strong definition in EVERY translation unit that imports the module, so it fails
-//    to link with a duplicate symbol. Verified: `duplicate symbol 'thread-local wrapper
-//    routine for infinity::g_hnsw_visited_set@infinity_core'` in both harness executables.
-//
-// A non-inline function with a function-local `static thread_local` is defined in this one
-// TU, so importers merely reference it. Keep it non-inline for that reason. It is called
-// once per SearchLayer, not per neighbour, so the TLS access and guard check are noise.
-//
-// The connectivity-repair traversal elsewhere in this file keeps its own local visited
-// vector; it runs once, outside the hot path, and must stay independent of this one.
-HnswVisitedSet &HnswThreadVisitedSet() {
-    static thread_local HnswVisitedSet visited;
-    return visited;
-}
+// NOTE: an earlier revision replaced SearchLayer's `std::vector<bool> visited` with a
+// persistent per-thread table (epoch stamps, then a bit-packed variant with a dirty-word
+// undo list). Both measured SLOWER at n=1M / 12 workers -- see the commit that reverted
+// them. std::vector<bool> is bit-packed, so the per-call buffer is only 125,000 bytes at
+// n=1M, it is allocated and freed at the same size every call so malloc returns the same
+// cache-hot block, and zeroing it is a few thousand L1-resident line writes. The traffic
+// that looked like ~129 GB of memset was never DRAM traffic, and no bookkeeping scheme
+// beat simply redoing it. Do not "optimise" this again without a paired measurement.
 
 export struct KnnSearchOption {
     size_t ef_ = 0;
@@ -224,6 +116,8 @@ public:
     KnnHnswBase() : M_(0), ef_construction_(0), mult_(0), prefetch_step_(DEFAULT_PREFETCH_SIZE) {}
     KnnHnswBase(This &&other) noexcept
         : M_(std::exchange(other.M_, 0)), ef_construction_(std::exchange(other.ef_construction_, 0)), mult_(std::exchange(other.mult_, 0.0)),
+          prune_headroom_(std::exchange(other.prune_headroom_, 0.0F)),
+          level0_double_budget_(std::exchange(other.level0_double_budget_, false)),
           build_failed_(other.build_failed_.exchange(false, std::memory_order_acq_rel)), level_generator_(std::move(other.level_generator_)),
           level_cursor_(std::exchange(other.level_cursor_, 0)),
           data_store_(std::move(other.data_store_)), distance_(std::move(other.distance_)),
@@ -238,6 +132,8 @@ public:
             M_ = std::exchange(other.M_, 0);
             ef_construction_ = std::exchange(other.ef_construction_, 0);
             mult_ = std::exchange(other.mult_, 0.0);
+            prune_headroom_ = std::exchange(other.prune_headroom_, 0.0F);
+            level0_double_budget_ = std::exchange(other.level0_double_budget_, false);
             build_failed_.store(other.build_failed_.exchange(false, std::memory_order_acq_rel), std::memory_order_release);
             level_generator_ = std::move(other.level_generator_);
             level_cursor_ = std::exchange(other.level_cursor_, 0);
@@ -247,6 +143,37 @@ public:
         }
         return *this;
     }
+
+    // Fraction of a full reciprocal list to free when pruning it, as in FAISS's
+    // HNSW::prune_headroom (impl/HNSW.h). 0 reproduces this file's historical behaviour:
+    // prune back to exactly Mmax, so the very next back-link finds the list full again and
+    // re-runs the O(degree^2) diversity heuristic. Leaving headroom means the next
+    // ~headroom*Mmax back-links take the cheap append path instead, so the heuristic runs
+    // once per that many insertions rather than every time -- and each run is cheaper too,
+    // since it is quadratic in a smaller target.
+    //
+    // This SPENDS GRAPH QUALITY for build time: the freed slots are real edges dropped. FAISS
+    // reports "minimal effect on recall ... particularly with the default 0.2", but that must
+    // be re-measured here, not inherited -- their figure came from 10M vectors at 192 threads
+    // where lock contention dominates, and at 12 threads only the work reduction remains.
+    //
+    // Clamped to [0, 0.5]: beyond half the list the graph degrades fast and the append path
+    // stops being the common case. Must be set before the build.
+    void SetPruneHeadroom(float headroom) { prune_headroom_ = std::clamp(headroom, 0.0F, 0.5F); }
+    float GetPruneHeadroom() const { return prune_headroom_; }
+
+    // Whether a new node gets a forward-edge budget of 2*M at level 0, as FAISS does, rather
+    // than M at every layer as the HNSW paper and hnswlib do (and as this file always has).
+    //
+    // This is the documented cause of Infinity's recall deficit against FAISS at matched
+    // parameters (docs/apple_silicon/README.md): identical M gives a ~7% sparser level-0
+    // graph. Capacity already permits it -- GetMmax reserves 2*M slots at level 0 either way
+    // -- so enabling this changes only how many of those slots a new node fills.
+    //
+    // This BUYS GRAPH QUALITY with build time, i.e. the opposite trade to prune headroom.
+    // Must be set before the build.
+    void SetLevel0DoubleBudget(bool enabled) { level0_double_budget_ = enabled; }
+    bool GetLevel0DoubleBudget() const { return level0_double_budget_; }
 
     size_t GetSizeInBytes() const { return sizeof(M_) + sizeof(ef_construction_) + data_store_.GetSizeInBytes(); }
 
@@ -342,15 +269,7 @@ protected:
         // in via the (Compare, Container&&) constructor. The moved-in vector is empty, so
         // the implicit make_heap over an empty range is a no-op.
         //
-        // result_n is a HEURISTIC initial capacity, not a bound: commit_candidate admits on
-        // `dist <= worst` while the loop terminates on strict `>`, so a graph with many
-        // equal distances can grow the frontier well past result_n. This just removes the
-        // early doubling steps for the common case.
-        DistHeap candidate = [result_n] {
-            std::vector<PDV> storage;
-            storage.reserve(result_n);
-            return DistHeap(CMP{}, std::move(storage));
-        }();
+        DistHeap candidate;
 
         data_store_.PrefetchVec(enter_point);
         // enter_point will not be added to result_handler, the distance is not used
@@ -361,9 +280,8 @@ protected:
         }
 
         size_t cur_vec_num = data_store_.cur_vec_num();
-        HnswVisitedSet &visited = HnswThreadVisitedSet();
-        visited.Begin(cur_vec_num);
-        visited.Mark(enter_point);
+        std::vector<bool> visited(cur_vec_num, false);
+        visited[enter_point] = true;
         auto commit_candidate = [&](DistanceType dist, VertexType vertex) {
             if (result_handler.GetSize(0) < result_n || dist <= result_handler.GetDistance0(0)) {
                 candidate.emplace(-dist, vertex);
@@ -392,11 +310,10 @@ protected:
                         data_store_.PrefetchVec(neighbors_p[prefetch_start++]);
                     }
                     VertexType n_idx = neighbors_p[i];
-                    // Short-circuit order matters: the range check must precede TestAndMark,
-                    // which indexes the table unchecked.
-                    if (n_idx >= (VertexType)cur_vec_num || visited.TestAndMark(n_idx)) {
+                    if (n_idx >= (VertexType)cur_vec_num || visited[n_idx]) {
                         continue;
                     }
+                    visited[n_idx] = true;
                     commit_candidate(distance_(query, n_idx, data_store_, query_i), n_idx);
                 }
             };
@@ -414,9 +331,10 @@ protected:
                             data_store_.PrefetchVec(neighbors_p[prefetch_start++]);
                         }
                         const VertexType n_idx = neighbors_p[i];
-                        if (n_idx >= (VertexType)cur_vec_num || visited.TestAndMark(n_idx)) {
+                        if (n_idx >= (VertexType)cur_vec_num || visited[n_idx]) {
                             continue;
                         }
+                        visited[n_idx] = true;
                         pending_vertices[pending_count++] = n_idx;
                         if (pending_count == pending_vertices.size()) {
                             bool threshold_path_ran = false;
@@ -527,6 +445,11 @@ protected:
             auto [n_neighbors_p, n_neighbor_size_p] = data_store_.GetNeighborsMut(n_idx, layer_idx);
             VertexListSize n_neighbor_size = *n_neighbor_size_p;
             size_t Mmax = layer_idx == 0 ? data_store_.Mmax0() : data_store_.Mmax();
+            // Deliberately compared against the full Mmax, NOT the (possibly smaller) prune
+            // target below. Appending up to physical capacity is the entire point of leaving
+            // headroom: gating this at the prune target instead would stop the cheap append at
+            // that size and re-run the heuristic on every subsequent back-link, which is
+            // strictly worse than having no headroom at all.
             if (n_neighbor_size < VertexListSize(Mmax)) {
                 *(n_neighbors_p + n_neighbor_size) = vertex_i;
                 *n_neighbor_size_p = n_neighbor_size + 1;
@@ -545,7 +468,14 @@ protected:
                 candidates.emplace_back(distance_(n_data, candidate_vertex, data_store_, n_idx), candidate_vertex);
             }
 
-            SelectNeighborsHeuristic<true>(std::move(candidates), Mmax, n_neighbors_p, n_neighbor_size_p); // write in memory
+            // Compute the target the way FAISS does -- scale the capacity and truncate ONCE --
+            // rather than as Mmax - floor(Mmax*headroom), which is not the same number:
+            // at Mmax=64, headroom=0.2 the former gives 51 and the latter 52.
+            size_t prune_target = static_cast<size_t>(static_cast<double>(Mmax) * (1.0 - static_cast<double>(prune_headroom_)));
+            if (prune_target < 1) {
+                prune_target = 1;
+            }
+            SelectNeighborsHeuristic<true>(std::move(candidates), prune_target, n_neighbors_p, n_neighbor_size_p); // write in memory
         }
     }
 
@@ -1009,7 +939,13 @@ private:
             {
                 HnswVertexUniqueLock vertex_lock = data_store_.UniqueLock(vertex_i);
                 const auto [q_neighbors_p, q_neighbor_size_p] = data_store_.GetNeighborsMut(vertex_i, cur_layer);
-                SelectNeighborsHeuristic(std::move(search_result), M_, q_neighbors_p, q_neighbor_size_p);
+                // Forward-edge budget for the node being inserted. M at every layer is the
+                // HNSW paper's and hnswlib's convention; FAISS gives 2*M at level 0, and that
+                // divergence is why Infinity's recall trails FAISS at identical M. Level 0
+                // physically holds Mmax0 = 2*M either way, so this only decides how much of
+                // that is used. See SetLevel0DoubleBudget.
+                const size_t forward_budget = (cur_layer == 0 && level0_double_budget_) ? 2 * M_ : M_;
+                SelectNeighborsHeuristic(std::move(search_result), forward_budget, q_neighbors_p, q_neighbor_size_p);
                 if (*q_neighbor_size_p <= 0) {
                     throw std::logic_error("HNSW construction selected an empty neighbor list for a non-empty graph");
                 }
@@ -1195,6 +1131,14 @@ protected:
 
     // 1 / log(1.0 * M_)
     double mult_;
+
+    // Two graph-shape knobs, both defaulting to the behaviour this file has always had, so a
+    // plain build is bit-identical and the determinism gate stays meaningful. They pull in
+    // OPPOSITE directions and are meant to be swept against each other: prune_headroom_ buys
+    // build time by spending graph quality, level0_double_budget_ buys quality by spending
+    // build time. See SetPruneHeadroom / SetLevel0DoubleBudget.
+    float prune_headroom_ = 0.0F;
+    bool level0_double_budget_ = false;
 
     mutable std::shared_mutex operation_mutex_;
     std::atomic<bool> build_failed_{};
