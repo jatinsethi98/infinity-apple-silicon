@@ -14,6 +14,10 @@ inline constexpr std::uint64_t kHnswD0HeldOutQuerySeed = 0x6a09e667f3bcc909ULL;
 inline constexpr std::array<std::size_t, 8> kHnswD0RecallEf{32, 64, 128, 256, 512, 128, 256, 512};
 inline constexpr std::array<std::size_t, 8> kHnswD0RecallK{10, 10, 10, 10, 10, 100, 100, 100};
 
+// The canonical SIFT1M base cardinality. The published ground-truth IDs address this exact
+// corpus, so external-truth recall is only defined here (see HnswD0ExternalRecallAudit).
+inline constexpr std::size_t kHnswD0ExternalTruthVectorCount = 1000000;
+
 struct HnswD0NeighborRange {
     const std::int32_t *data = nullptr;
     std::size_t size = 0;
@@ -82,6 +86,47 @@ struct HnswD0RecallAudit {
     std::array<std::vector<HnswD0ReturnedResult>, 8> returned_results;
 };
 
+// Recall against the CANONICAL SIFT1M ground truth, as distinct from HnswD0RecallAudit's
+// self-audit.
+//
+// Why a separate entity rather than a mode of AuditHnswD0Recall: the two differ in what
+// they can prove and what they cost.
+//
+//   * The self-audit derives truth itself, in double precision, over every indexed row.
+//     That works at any n, which is what makes it usable in the small smokes, but the
+//     "recall" it reports is against a corpus it invented -- it cannot be compared to a
+//     number anyone else published.
+//   * This one reads the published truth. That makes it comparable to FAISS and to the
+//     literature, but it is only meaningful at n=1,000,000: the published IDs index the
+//     full canonical base (query 0's true nearest neighbour is ID 932085), so against a
+//     prefix they address the wrong rows -- silently, since the IDs are still in range for
+//     a large enough prefix. Hence the exact-n requirement, enforced not assumed.
+//
+// It is deliberately CHEAP. Recomputing truth at n=1e6 x 10,000 queries would be ~1.3e12
+// distance evaluations plus 10,000 sorts of a million elements. But recall@10 does not need
+// the full distance array -- only the k-th true neighbour's distance, as the acceptance
+// cutoff, plus one distance per returned label. That is ~20 distance evaluations per query
+// instead of a million, so this can run over all 10,000 official queries.
+//
+// Both a tie-tolerant and a strict-ID recall are reported. Tie-tolerant is the correct
+// figure (a vector at exactly the cutoff distance is an equally valid answer, and SIFT has
+// such ties), but publishing only it invites the suspicion that ties are inflating it, so
+// the strict count travels alongside as the pessimistic bound.
+struct HnswD0ExternalRecallAudit {
+    bool valid = false;
+    std::string truth_source;
+    std::size_t query_count = 0;
+    std::size_t groundtruth_columns = 0;
+    std::string queries_sha256;
+    std::string groundtruth_sha256;
+    // Indexed to match the first five entries of kHnswD0RecallEf: ef 32/64/128/256/512.
+    std::array<double, 5> recall_at_10{};
+    std::array<double, 5> strict_id_recall_at_10{};
+    // Queries whose 10th true neighbour shares its distance with a further row, i.e. those
+    // for which the two recall figures above can legitimately disagree.
+    std::size_t queries_with_cutoff_ties = 0;
+};
+
 struct HnswD0AttestationImage {
     std::uintptr_t header = 0;
     std::intptr_t slide = 0;
@@ -148,3 +193,16 @@ HnswD0RecallAudit AuditHnswD0Recall(const float *base,
                                     std::size_t dimension,
                                     const std::vector<float> &queries,
                                     const HnswD0Search &search);
+
+// `vector_count` MUST be exactly kHnswD0ExternalTruthVectorCount; see the struct comment.
+// `queries` is nq*dimension row-major, `groundtruth` is nq*groundtruth_columns row-major
+// ascending-by-distance IDs. `query_limit` caps how many queries are evaluated (0 = all);
+// the cap exists so a cheaper gate can run a prefix, and it is recorded in the result.
+HnswD0ExternalRecallAudit AuditHnswD0RecallExternal(const float *base,
+                                                    std::size_t vector_count,
+                                                    std::size_t dimension,
+                                                    const std::vector<float> &queries,
+                                                    const std::vector<std::int32_t> &groundtruth,
+                                                    std::size_t groundtruth_columns,
+                                                    std::size_t query_limit,
+                                                    const HnswD0Search &search);

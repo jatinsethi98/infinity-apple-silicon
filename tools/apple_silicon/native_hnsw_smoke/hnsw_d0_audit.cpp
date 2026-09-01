@@ -784,3 +784,134 @@ HnswD0RecallAudit AuditHnswD0Recall(const float *base,
     result.valid = true;
     return result;
 }
+
+namespace {
+
+// Exact squared L2 in double precision. This TU is compiled with -ffp-contract=off (see the
+// CMakeLists), which matters here: an fused multiply-add would change the low bit of a sum
+// and could flip the `<= cutoff` comparison for a candidate sitting exactly on the cutoff --
+// precisely the tie case this audit is built to count correctly.
+double ExactSquaredL2(const float *left, const float *right, std::size_t dimension) {
+    double total = 0.0;
+    for (std::size_t index = 0; index < dimension; ++index) {
+        const double difference = static_cast<double>(left[index]) - static_cast<double>(right[index]);
+        total += difference * difference;
+    }
+    return total;
+}
+
+} // namespace
+
+HnswD0ExternalRecallAudit AuditHnswD0RecallExternal(const float *base,
+                                                    std::size_t vector_count,
+                                                    std::size_t dimension,
+                                                    const std::vector<float> &queries,
+                                                    const std::vector<std::int32_t> &groundtruth,
+                                                    std::size_t groundtruth_columns,
+                                                    std::size_t query_limit,
+                                                    const HnswD0Search &search) {
+    constexpr std::size_t kK = 10;
+
+    Require(base != nullptr, "external recall audit base pointer is null");
+    // Enforced, not documented: the published IDs index the full canonical corpus, and
+    // against a prefix they would still be in range for a large enough prefix -- so the
+    // failure mode is a plausible-looking wrong number, not a crash.
+    Require(vector_count == kHnswD0ExternalTruthVectorCount,
+            "external recall audit requires the full canonical base (n=1000000); published "
+            "ground-truth IDs address that corpus and are meaningless against a prefix");
+    Require(dimension > 0, "external recall audit dimension is invalid");
+    Require(bool(search), "external recall audit search callback is missing");
+    // kK for the cutoff, plus one more rank to detect a tie sitting on it.
+    Require(groundtruth_columns > kK, "external recall audit needs more than 10 ground-truth columns");
+    Require(queries.size() % dimension == 0, "external recall audit query corpus is not a whole number of rows");
+
+    const std::size_t available_queries = queries.size() / dimension;
+    Require(available_queries > 0, "external recall audit query corpus is empty");
+    Require(groundtruth.size() == available_queries * groundtruth_columns,
+            "external recall audit ground truth row count does not match the query corpus");
+
+    const std::size_t query_count = (query_limit == 0 || query_limit > available_queries) ? available_queries : query_limit;
+
+    HnswD0ExternalRecallAudit result;
+    result.truth_source = "official-sift1m";
+    result.query_count = query_count;
+    result.groundtruth_columns = groundtruth_columns;
+
+    // Hash the exact bytes consumed, so a swapped or truncated dataset cannot masquerade as
+    // this one. Only the evaluated prefix is covered -- that is what the numbers depend on.
+    Sha256 query_hash;
+    query_hash.Update("infinity-hnsw-d0-external-queries-v1");
+    query_hash.UpdateU64(query_count);
+    query_hash.UpdateU64(dimension);
+    for (std::size_t index = 0; index < query_count * dimension; ++index) {
+        query_hash.UpdateU32(std::bit_cast<std::uint32_t>(queries[index]));
+    }
+    result.queries_sha256 = query_hash.HexDigest();
+
+    Sha256 truth_hash;
+    truth_hash.Update("infinity-hnsw-d0-external-truth-v1");
+    truth_hash.UpdateU64(query_count);
+    truth_hash.UpdateU64(groundtruth_columns);
+    for (std::size_t index = 0; index < query_count * groundtruth_columns; ++index) {
+        truth_hash.UpdateU32(static_cast<std::uint32_t>(groundtruth[index]));
+    }
+    result.groundtruth_sha256 = truth_hash.HexDigest();
+
+    std::array<std::size_t, 5> tolerant_hits{};
+    std::array<std::size_t, 5> strict_hits{};
+
+    for (std::size_t query_index = 0; query_index < query_count; ++query_index) {
+        const float *query = queries.data() + query_index * dimension;
+        const std::int32_t *truth_row = groundtruth.data() + query_index * groundtruth_columns;
+
+        // Distances to the first kK+1 published neighbours. Two jobs: the rank-(kK-1)
+        // distance is the acceptance cutoff, and rank kK tells us whether a further row ties
+        // with it. Verify the published order really is ascending rather than trusting it --
+        // a descending or shuffled file would otherwise yield a quietly wrong cutoff.
+        std::array<double, kK + 1> truth_distances{};
+        for (std::size_t rank = 0; rank <= kK; ++rank) {
+            const std::int32_t truth_id = truth_row[rank];
+            Require(truth_id >= 0 && static_cast<std::size_t>(truth_id) < vector_count,
+                    "external recall audit ground-truth id is out of range for the base");
+            truth_distances[rank] = ExactSquaredL2(query, base + static_cast<std::size_t>(truth_id) * dimension, dimension);
+            Require(rank == 0 || truth_distances[rank] >= truth_distances[rank - 1],
+                    "external recall audit ground-truth row is not ascending by distance");
+        }
+        const double cutoff = truth_distances[kK - 1];
+        if (truth_distances[kK] == cutoff) {
+            ++result.queries_with_cutoff_ties;
+        }
+
+        for (std::size_t point = 0; point < tolerant_hits.size(); ++point) {
+            const auto returned = search(query, kK, kHnswD0RecallEf[point]);
+            Require(returned.size() == kK, "external recall audit search returned the wrong result count");
+            for (const auto &[distance, label] : returned) {
+                Require(std::isfinite(distance), "external recall audit search returned a non-finite distance");
+                Require(label >= 0 && static_cast<std::size_t>(label) < vector_count,
+                        "external recall audit search returned an out-of-range label");
+                // Tie-tolerant: any row within the cutoff distance is an equally correct
+                // answer, whether or not it is one of the kK the file happens to list.
+                if (ExactSquaredL2(query, base + static_cast<std::size_t>(label) * dimension, dimension) <= cutoff) {
+                    ++tolerant_hits[point];
+                }
+                // Strict: the label must be one of the kK listed IDs. Pessimistic, and the
+                // figure most other harnesses report.
+                if (std::find(truth_row, truth_row + kK, static_cast<std::int32_t>(label)) != truth_row + kK) {
+                    ++strict_hits[point];
+                }
+            }
+        }
+    }
+
+    const double denominator = static_cast<double>(query_count * kK);
+    for (std::size_t point = 0; point < tolerant_hits.size(); ++point) {
+        result.recall_at_10[point] = static_cast<double>(tolerant_hits[point]) / denominator;
+        result.strict_id_recall_at_10[point] = static_cast<double>(strict_hits[point]) / denominator;
+        // Every strictly-matched label is within the cutoff by construction, so the tolerant
+        // count can never be the smaller of the two. If it is, the cutoff is wrong.
+        Require(tolerant_hits[point] >= strict_hits[point],
+                "external recall audit tie-tolerant recall fell below strict recall");
+    }
+    result.valid = true;
+    return result;
+}
