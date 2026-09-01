@@ -47,13 +47,46 @@ sha256 `f2e29c0f…`).
 
 ## Adding a new experiment arm
 
-The driver compares exactly two binaries that share the argv/stdout contract above.
-To test an optimization: build a new variant binary that still emits the same
-`infinity_*` keys, then point `--infinity-bin` at it and `--faiss-bin` at the FAISS
-reference (or at the previous Infinity binary for an A/B). Change nothing else — same
-dataset, M, efC, participants — so the only variable is the code under test. Compare
-`results.json` across timestamped runs. Do **not** add verification layers, schemas, or
-provenance capture; if a number needs defending, re-run with more `--pairs` on AC power.
+`run_baseline.py` compares Infinity against **FAISS**. To test an optimization, build a
+variant binary that still emits the same `infinity_*` keys, point `--infinity-bin` at it,
+keep `--faiss-bin` on the FAISS reference, and change nothing else — same dataset, M, efC,
+participants. Compare `results.json` across timestamped runs.
+
+### For old-vs-new Infinity, use `ab_build.py` — not this driver
+
+An earlier version of this file said you could A/B two Infinity binaries by pointing
+`--faiss-bin` at the previous one. **That silently produces wrong numbers.** The harness
+binary derives its stdout key prefix from its own compiled-in engine identity
+(`hnsw_d0_runner.cpp`), so an Infinity binary always emits `infinity_*`. As the `faiss`
+arm it misses `faiss_cold_build_ns`, misses the unprefixed fallback, and gets downgraded
+to `wall_clock_fallback` with no recall values — which also silently defeats the recall
+gate. Do not do it.
+
+Comparing two independent `run_baseline.py` campaigns is also statistically too weak for
+the effect sizes that matter here. The observed 6-run relative MAD on the 1M build is
+0.6–1.4%, and one recorded run held a 57.8 s thermal outlier against a 49.0 s minimum;
+with `SE(median) ≈ 1.858·MAD/√n`, a 6-vs-6 difference of medians has a 95% half-width of
+1.4–3.0%. A real 1–2% win is not distinguishable that way, and "the median improved" is
+not evidence.
+
+`scripts/bench/ab_build.py` does it properly: both binaries interleaved inside one
+campaign in randomized per-block order, decided on a two-sided 95% t interval over the
+per-block log ratios `ln(t_candidate/t_control)`, with min-of-N as a
+contamination-robust cross-check. Keep a change only when the interval excludes 1.0.
+
+```bash
+python3 scripts/bench/ab_build.py \
+  --dataset /Users/sethjatq/Desktop/proj/datasets/sift1m/base.f32 \
+  --n 1000000 --d 128 --m 32 --efc 200 --participants 12 \
+  --blocks 15 --require-ac --label my-change \
+  --control-bin  build/bench/infinity_hnsw_d0.control \
+  --candidate-bin build/bench/infinity_hnsw_d0
+```
+
+Run it with `--control-bin` and `--candidate-bin` pointing at the **same** file first: that
+measures the harness noise floor and tells you the smallest effect the campaign can
+resolve. Do **not** add verification layers, schemas, or provenance capture; if a number
+needs defending, add blocks.
 
 ## Known limitations (read before quoting a number)
 

@@ -394,13 +394,24 @@ def main():
             "submitted_tasks": er[0].get("submitted_tasks") if er else None,
         }
 
-    # recall-parity gate
-    gate = {"threshold": args.recall_deficit_threshold, "per_ef": {}, "pass": True}
+    # recall-parity gate.
+    #
+    # This gate FAILS CLOSED. A missing recall value used to leave the overall gate at
+    # True, so a run where an engine emitted no recall keys reported "reportable" while
+    # having compared nothing -- the worst possible failure mode for a fairness gate.
+    # An absent value is now a gate failure, because "we did not measure it" and "it
+    # matched" must never produce the same verdict.
+    gate = {"threshold": args.recall_deficit_threshold, "per_ef": {}, "pass": True,
+            "missing": []}
     for ef in args.ef_list:
         fi = agg["faiss"]["recall_at_10"].get(ef)
         ii = agg["infinity"]["recall_at_10"].get(ef)
         if fi is None or ii is None:
-            gate["per_ef"][ef] = {"deficit": None, "pass": None}
+            absent = [n for n, v in (("faiss", fi), ("infinity", ii)) if v is None]
+            gate["per_ef"][ef] = {"faiss": fi, "infinity": ii, "deficit": None,
+                                  "pass": False, "reason": "missing:" + ",".join(absent)}
+            gate["missing"].append(ef)
+            gate["pass"] = False
             continue
         deficit = fi - ii  # positive => infinity worse
         ok = abs(deficit) <= args.recall_deficit_threshold
@@ -472,7 +483,7 @@ def print_report(args, agg, gate, ratio, all_ok, wall_fallback, run_dir):
         g = gate["per_ef"].get(ef, {})
         fi, ii, dfc = g.get("faiss"), g.get("infinity"), g.get("deficit")
         gp = g.get("pass")
-        gate_s = "n/a" if gp is None else ("PASS" if gp else "FAIL")
+        gate_s = "PASS" if gp else ("FAIL:" + g["reason"] if g.get("reason") else "FAIL")
         print(f"| {ef} | {('%.4f' % fi) if fi is not None else 'n/a'} | "
               f"{('%.4f' % ii) if ii is not None else 'n/a'} | "
               f"{('%+.4f' % dfc) if dfc is not None else 'n/a'} | {gate_s} |")
