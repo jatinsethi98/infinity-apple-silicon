@@ -53,12 +53,30 @@ struct HnswCompressionTargetTag {};
 // launches any build task, so cur_vec_num is already the FULL corpus size on every
 // insertion -- not a growing prefix. At n=1M that allocated and zeroed a 125,000-byte
 // bitmap ~1.03M times over a build: ~129 GB of zeroing plus ~1.03M malloc/free pairs, to
-// serve a traversal that touches at most ~ef*M distinct ids.
+// serve a traversal that touches at most ~ef*M distinct ids -- thousands, not a million.
 //
-// Instead each thread keeps one stamp buffer and a monotonically increasing epoch. A
-// vertex counts as visited iff its stamp equals the current epoch, so Begin() is O(1)
-// except on epoch wraparound, which clears once every numeric_limits<Stamp>::max()
-// traversals. Same idea as FAISS's VisitedTable.
+// Instead each thread keeps ONE bitmap for the whole program, and undoes it after each
+// traversal by clearing only the words it actually set.
+//
+// Staying bit-packed is the whole point, and is a correction of an earlier version of this
+// class that used a one-stamp-per-vertex byte/short table (the shape FAISS's VisitedTable
+// and hnswlib's VisitedList use). That measured 5-9% SLOWER than the std::vector<bool> it
+// replaced, and the reason is footprint, not instruction count:
+//
+//   * bit-packed, n=1M: 125,000 bytes -- fits inside one M3 P-core's 128 KB L1d, and
+//     12 workers together occupy 1.5 MB of the 16 MB shared L2.
+//   * u16 stamps, n=1M: 2 MB per thread, so 24 MB across 12 workers -- overflows the
+//     shared L2 outright.
+//
+// A build performs on the order of 10^10 visited-checks against this structure but only
+// ~10^6 traversal resets, so the resets are not what to optimise for: any win from a
+// cheaper reset is dwarfed by moving the checks from L1 to L2/DRAM. The stamp table buys
+// an O(1) reset and loses far more on every access.
+//
+// So: keep the cache-resident representation, and make the reset proportional to work done
+// rather than to n by remembering which words were dirtied. A traversal marks at most
+// ~ef*M distinct ids -- thousands, against a million-entry table -- so the undo list is
+// short and sequential.
 //
 // MUST be thread-local: SearchLayer runs concurrently on every build worker
 // (hnsw_bulk_build.cppm). Sizing from the caller's cur_vec_num snapshot preserves exactly
@@ -67,44 +85,57 @@ struct HnswCompressionTargetTag {};
 // call, as they already were.
 class HnswVisitedSet {
 public:
-    // u16 rather than u8 deliberately. At n=1M a u8 stamp wraps every 255 traversals and
-    // so pays ~4,000 full 1 MB clears across a build (~4 GB); u16 wraps ~15 times (~30 MB)
-    // for 2 MB per thread, i.e. 24 MB across 12 workers on a 36 GB machine. Narrowing this
-    // to u8 halves the table's cache footprint at the cost of that clearing, and is the one
-    // knob here worth re-measuring.
-    using Stamp = std::uint16_t;
-
     // Start a traversal over [0, count). Grows without shrinking, so a thread that has
     // already served a larger index keeps its buffer.
     void Begin(std::size_t count) {
-        if (stamps_.size() < count) {
-            stamps_.resize(count, Stamp{0});
+        const std::size_t needed = WordsFor(count);
+        if (words_.size() < needed) {
+            words_.resize(needed, Word{0});
         }
-        if (epoch_ == std::numeric_limits<Stamp>::max()) {
-            std::fill(stamps_.begin(), stamps_.end(), Stamp{0});
-            epoch_ = 1;
-        } else {
-            ++epoch_;
+        // Zero every word that the previous traversal dirtied. Clearing the whole word
+        // rather than the individual bit is both cheaper and safe: every set bit was
+        // recorded here, so every dirty word is visited, and zeroing one twice is a no-op.
+        // That makes this correct without de-duplicating the list.
+        for (const std::uint32_t index : dirty_) {
+            words_[index >> kWordShift] = Word{0};
         }
-        // epoch_ is now >= 1, and 0 is never a live epoch, so both a freshly grown region
-        // and a freshly cleared table read as unvisited.
+        dirty_.clear();
     }
 
     // Returns whether `index` was already visited this traversal, and marks it either way.
     // Callers must have bounds-checked `index` against the count passed to Begin().
     bool TestAndMark(std::size_t index) {
-        if (stamps_[index] == epoch_) {
+        Word &word = words_[index >> kWordShift];
+        const Word bit = Word{1} << (index & kBitMask);
+        if ((word & bit) != Word{0}) {
             return true;
         }
-        stamps_[index] = epoch_;
+        word |= bit;
+        dirty_.push_back(static_cast<std::uint32_t>(index));
         return false;
     }
 
-    void Mark(std::size_t index) { stamps_[index] = epoch_; }
+    void Mark(std::size_t index) {
+        Word &word = words_[index >> kWordShift];
+        const Word bit = Word{1} << (index & kBitMask);
+        if ((word & bit) == Word{0}) {
+            word |= bit;
+            dirty_.push_back(static_cast<std::uint32_t>(index));
+        }
+    }
 
 private:
-    std::vector<Stamp> stamps_;
-    Stamp epoch_{0};
+    using Word = std::uint64_t;
+    static constexpr std::size_t kWordShift = 6; // 64 bits per word
+    static constexpr std::size_t kBitMask = 63;
+
+    static std::size_t WordsFor(std::size_t count) { return (count + kBitMask) >> kWordShift; }
+
+    std::vector<Word> words_;
+    // u32 because vertex ids are int32 throughout this file, so 4 bytes suffice and the
+    // list stays half the size an 8-byte index would make it -- it shares L1 with the
+    // bitmap, so its footprint is not incidental.
+    std::vector<std::uint32_t> dirty_;
 };
 
 // One object per thread for the whole program, reached through a non-template accessor.
