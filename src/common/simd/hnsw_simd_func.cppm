@@ -1033,6 +1033,33 @@ export float F32L2AVXResidual(const float *pv1, const float *pv2, size_t dim) {
 
 #if defined(__SSE2__)
 
+#if defined(__APPLE__) && defined(__aarch64__)
+// Squared-L2 accumulate step, fused.
+//
+// Every Apple arm64 squared-L2 kernel below routes its accumulate through this one
+// function rather than writing _mm_add_ps(acc, _mm_mul_ps(diff, diff)) inline, and that is
+// load-bearing, not tidiness: the scalar and batch kernels' outputs are mixed inside a
+// single HNSW priority heap during construction, and native_simd_l2_smoke asserts they are
+// bit-identical to each other. If some sites fused and others did not, near-tie comparisons
+// in the same build would obey two different rounding rules. One definition makes that
+// impossible to get wrong.
+//
+// Why FMA at all: SIMDe lowers _mm_mul_ps and _mm_add_ps through separate inlined function
+// bodies, and the build sets no -ffp-contract, so clang emitted fsub.4s + fmul.4s +
+// fadd.4s with no fmla anywhere -- three FP ops per 4-wide chunk where two suffice. The
+// loop is FP-throughput-bound on this core both before and after
+// (max(48/4, 20/3, 65/8) = 12 cycles -> max(32/4, 20/3, 49/8) = 8), so removing a third of
+// the FP work is the single largest available kernel win. The fsub cannot be fused.
+//
+// Numerically this is a strict improvement: fma rounds once where add(mul()) rounds twice,
+// all accumulated terms are non-negative so there is no cancellation, and the error
+// constant drops from ~2nu to ~nu. It is NOT bit-identical to the unfused form in general.
+// It IS bit-identical on integral data whose partial sums stay under 2^24 -- which covers
+// SIFT1M (measured max component 184, so max sum-of-squares 128*184^2 = 4,333,568), so the
+// participants=1 graph hash still pins this change on that dataset.
+inline __m128 F32L2FusedAccumulate(__m128 accumulator, __m128 diff) { return vfmaq_f32(accumulator, diff, diff); }
+#endif
+
 export float F32L2SSE(const float *pv1, const float *pv2, size_t dim) {
     alignas(16) float TmpRes[4];
     size_t dim16 = dim >> 4;
@@ -1052,28 +1079,28 @@ export float F32L2SSE(const float *pv1, const float *pv2, size_t dim) {
         v2 = _mm_loadu_ps(pv2);
         pv2 += 4;
         diff = _mm_sub_ps(v1, v2);
-        sum0 = _mm_add_ps(sum0, _mm_mul_ps(diff, diff));
+        sum0 = F32L2FusedAccumulate(sum0, diff);
 
         v1 = _mm_loadu_ps(pv1);
         pv1 += 4;
         v2 = _mm_loadu_ps(pv2);
         pv2 += 4;
         diff = _mm_sub_ps(v1, v2);
-        sum1 = _mm_add_ps(sum1, _mm_mul_ps(diff, diff));
+        sum1 = F32L2FusedAccumulate(sum1, diff);
 
         v1 = _mm_loadu_ps(pv1);
         pv1 += 4;
         v2 = _mm_loadu_ps(pv2);
         pv2 += 4;
         diff = _mm_sub_ps(v1, v2);
-        sum2 = _mm_add_ps(sum2, _mm_mul_ps(diff, diff));
+        sum2 = F32L2FusedAccumulate(sum2, diff);
 
         v1 = _mm_loadu_ps(pv1);
         pv1 += 4;
         v2 = _mm_loadu_ps(pv2);
         pv2 += 4;
         diff = _mm_sub_ps(v1, v2);
-        sum3 = _mm_add_ps(sum3, _mm_mul_ps(diff, diff));
+        sum3 = F32L2FusedAccumulate(sum3, diff);
     }
 
     const __m128 sum = _mm_add_ps(_mm_add_ps(sum0, sum1), _mm_add_ps(sum2, sum3));
@@ -1152,61 +1179,61 @@ export void F32L2SSEBatch4(const float *query,
         query += 4;
         __m128 diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate0));
         candidate0 += 4;
-        sum00 = _mm_add_ps(sum00, _mm_mul_ps(diff, diff));
+        sum00 = F32L2FusedAccumulate(sum00, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate1));
         candidate1 += 4;
-        sum10 = _mm_add_ps(sum10, _mm_mul_ps(diff, diff));
+        sum10 = F32L2FusedAccumulate(sum10, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate2));
         candidate2 += 4;
-        sum20 = _mm_add_ps(sum20, _mm_mul_ps(diff, diff));
+        sum20 = F32L2FusedAccumulate(sum20, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate3));
         candidate3 += 4;
-        sum30 = _mm_add_ps(sum30, _mm_mul_ps(diff, diff));
+        sum30 = F32L2FusedAccumulate(sum30, diff);
 
         query_vector = _mm_loadu_ps(query);
         query += 4;
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate0));
         candidate0 += 4;
-        sum01 = _mm_add_ps(sum01, _mm_mul_ps(diff, diff));
+        sum01 = F32L2FusedAccumulate(sum01, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate1));
         candidate1 += 4;
-        sum11 = _mm_add_ps(sum11, _mm_mul_ps(diff, diff));
+        sum11 = F32L2FusedAccumulate(sum11, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate2));
         candidate2 += 4;
-        sum21 = _mm_add_ps(sum21, _mm_mul_ps(diff, diff));
+        sum21 = F32L2FusedAccumulate(sum21, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate3));
         candidate3 += 4;
-        sum31 = _mm_add_ps(sum31, _mm_mul_ps(diff, diff));
+        sum31 = F32L2FusedAccumulate(sum31, diff);
 
         query_vector = _mm_loadu_ps(query);
         query += 4;
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate0));
         candidate0 += 4;
-        sum02 = _mm_add_ps(sum02, _mm_mul_ps(diff, diff));
+        sum02 = F32L2FusedAccumulate(sum02, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate1));
         candidate1 += 4;
-        sum12 = _mm_add_ps(sum12, _mm_mul_ps(diff, diff));
+        sum12 = F32L2FusedAccumulate(sum12, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate2));
         candidate2 += 4;
-        sum22 = _mm_add_ps(sum22, _mm_mul_ps(diff, diff));
+        sum22 = F32L2FusedAccumulate(sum22, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate3));
         candidate3 += 4;
-        sum32 = _mm_add_ps(sum32, _mm_mul_ps(diff, diff));
+        sum32 = F32L2FusedAccumulate(sum32, diff);
 
         query_vector = _mm_loadu_ps(query);
         query += 4;
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate0));
         candidate0 += 4;
-        sum03 = _mm_add_ps(sum03, _mm_mul_ps(diff, diff));
+        sum03 = F32L2FusedAccumulate(sum03, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate1));
         candidate1 += 4;
-        sum13 = _mm_add_ps(sum13, _mm_mul_ps(diff, diff));
+        sum13 = F32L2FusedAccumulate(sum13, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate2));
         candidate2 += 4;
-        sum23 = _mm_add_ps(sum23, _mm_mul_ps(diff, diff));
+        sum23 = F32L2FusedAccumulate(sum23, diff);
         diff = _mm_sub_ps(query_vector, _mm_loadu_ps(candidate3));
         candidate3 += 4;
-        sum33 = _mm_add_ps(sum33, _mm_mul_ps(diff, diff));
+        sum33 = F32L2FusedAccumulate(sum33, diff);
     }
 
     const __m128 sum0 = _mm_add_ps(_mm_add_ps(sum00, sum01), _mm_add_ps(sum02, sum03));
@@ -1280,13 +1307,13 @@ std::uint8_t F32L2SSEBatch4WithinThresholdAligned(const float *query,
             }
             const float *candidate = candidates[lane] + component;
             __m128 diff = _mm_sub_ps(query0, _mm_loadu_ps(candidate));
-            sums[lane].sum0 = _mm_add_ps(sums[lane].sum0, _mm_mul_ps(diff, diff));
+            sums[lane].sum0 = F32L2FusedAccumulate(sums[lane].sum0, diff);
             diff = _mm_sub_ps(query1, _mm_loadu_ps(candidate + 4));
-            sums[lane].sum1 = _mm_add_ps(sums[lane].sum1, _mm_mul_ps(diff, diff));
+            sums[lane].sum1 = F32L2FusedAccumulate(sums[lane].sum1, diff);
             diff = _mm_sub_ps(query2, _mm_loadu_ps(candidate + 8));
-            sums[lane].sum2 = _mm_add_ps(sums[lane].sum2, _mm_mul_ps(diff, diff));
+            sums[lane].sum2 = F32L2FusedAccumulate(sums[lane].sum2, diff);
             diff = _mm_sub_ps(query3, _mm_loadu_ps(candidate + 12));
-            sums[lane].sum3 = _mm_add_ps(sums[lane].sum3, _mm_mul_ps(diff, diff));
+            sums[lane].sum3 = F32L2FusedAccumulate(sums[lane].sum3, diff);
         };
         consume_lane(0, 0x01);
         consume_lane(1, 0x02);
