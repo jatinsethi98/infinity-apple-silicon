@@ -95,8 +95,38 @@ recall parity and the first that achieves it. The 64-query recall estimate
 (~0.0016 granularity, larger sampling noise) does not support a tighter claim; a
 10,000-query recall harness would.
 
-This is the number to beat. Reaching the project's >=1.5x goal requires roughly a
-1.6x-1.8x improvement in Infinity's index-build throughput from here.
+### Superseded 2026-09-02 by the whole-vector prefetch fix (commit 30dd58cbe)
+
+`PlainVecStoreInnerBase::Prefetch` issued one `__builtin_prefetch` per candidate
+vector, covering the first 64-byte cache line of a 512-byte (d=128) embedding and
+leaving the other seven lines to stall. Prefetching the whole vector is 1.3796x on
+index build (paired A/B, 15 blocks, 95% CI [0.7163, 0.7335]). Re-measured on the same
+machine, same day, same Accelerate-linked FAISS reference:
+
+| comparison | before | after | note |
+|---|---:|---:|---|
+| equal-param build (efC=200) | 0.813x | **0.590x** = 1.694x faster | recall-unmatched, not claimable |
+| **iso-recall build** | 1.178x slower | **0.744x** = **1.344x faster** | Infinity efC=250 vs FAISS efC=200 |
+| QPS (k=10, ef=256) | 1.092x | **1.364x** | same hint helps the query path |
+
+Iso-recall detail: Infinity efC=250 builds in **47.680 s** against FAISS efC=200's
+**64.087 s**, with recall@10 ef64 0.8547 >= 0.8266 and ef128 0.8805 >= 0.8711, so
+parity is met at every efSearch. Equal-param detail: Infinity **37.944 s** (rel MAD
+0.4%) vs FAISS **64.288 s** (rel MAD 0.4%); QPS 24,271 vs 17,799; p50 latency 275 us
+vs 376 us.
+
+**This is now the number to beat: 1.344x at matched recall.** Reaching the project's
+>=1.5x goal needs a further ~10.4% off Infinity's build (47.680 s -> <=42.725 s).
+
+Where that is likely to come from, per a 1M/12-thread profile of the current build:
+53% of active worker time is in the L2 distance kernels and **38% is SearchLayer's own
+control flow** (frontier heap operations, visited tests, neighbour scan), which nothing
+has touched yet. Everything else is noise -- all lock traffic ~1%, all malloc ~0.5%,
+`__bzero` 0.26%. Note the kernel is latency-bound, not FP-bound: scattered candidate
+reads cost 64.8 ns per distance versus 9.2 ns sequential at identical arithmetic, which
+is why fusing the multiply-add (48 -> 32 FP ops) measured as nothing. Widening the
+kernel to 8 candidates in flight is worth only ~1.07x once whole-vector prefetch is in
+place, so it is not the next lever.
 
 ## Reproduce every number (one command each)
 ```bash
