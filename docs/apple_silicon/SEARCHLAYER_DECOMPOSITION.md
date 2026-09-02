@@ -97,8 +97,8 @@ Three things fall straight out of this table.
    discarded without a byte being read. Fixed — see below.
 2. **The batch tail is not a rare remainder.** Because nearly half of neighbours are skipped, four
    unvisited candidates accumulate slowly, and 8.7% of distance work lands on the 1-wide kernel.
-3. **The frontier reaches 1,087 entries**, not the ~200 an efC-sized bound would suggest, and the
-   summed sift-down depth is 2.2 billion levels over 1.03 billion pops.
+3. **The frontier reaches 1,087 entries**, not the ~235 an efC-sized bound would suggest, and the
+   summed sift-down depth is 2.196 billion levels over 243 million pops — a mean depth of 9.0.
 
 ## What worked
 
@@ -185,6 +185,19 @@ build time, a change to a region that is R% of it must remove X/R of that region
 - The 80.5% `commit_candidate` rejection rate is not addressable bit-identically: a vertex is
   visited once, and `SelectNeighborsHeuristic` consumes carried-in distances, so computing fewer
   distances means a different graph.
+- **The adjacency-list read at the top of each pop** (`GetNeighbors`, hnsw_alg.cppm) has no
+  prefetch, and cannot easily get one: it is serially blocking, because the neighbour vectors
+  cannot be prefetched until the list itself lands. The original hypothesis for this whole
+  investigation was that this stall was the dominant cost and that prefetching one or two pops
+  ahead from the frontier heap would recover 10-15%. That was never measured, and it is still not
+  measured — but the counters now size it. There are 243 million pops at the target workload, each
+  reading ~256 bytes scattered across a ~120 MB graph store. Even assuming every one is a fully
+  exposed miss at ~60 ns and every nanosecond is recoverable, that is ~14.6 s of thread time,
+  ~1.2 s of wall time across 12 workers, or **about 3% of build time as a hard upper bound** — a
+  legitimate lever, but a third of what the hypothesis assumed, and it needs a speculative prefetch
+  off the heap top whose hit rate is unknown because a push can change the top between pops.
+  Anyone picking this up should measure the mispredict rate first: the counters make that a
+  four-line addition.
 - The only large remaining memory lever is **reducing scatter** — co-locating vectors with
   adjacency so candidate reads are not random over a 512 MB store. Prefetch cannot hide the
   residual (30.1 ns prefetched-scattered against 9.2 ns sequential). This perturbs layout and needs
