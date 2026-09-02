@@ -104,6 +104,11 @@ public:
 
 
 
+    size_t DefaultPrefetchStep() const {
+        const size_t vec_bytes = data_store_.vec_store_meta().GetVecSizeInBytes();
+        return vec_bytes > 0 ? std::max<size_t>(1, L1_CACHE_SIZE / vec_bytes) : DEFAULT_PREFETCH_SIZE;
+    }
+
     static std::pair<size_t, size_t> GetMmax(size_t M) {
         constexpr size_t kMaximumM = static_cast<size_t>(std::numeric_limits<VertexListSize>::max()) / 2;
         if (M < 2 || M > kMaximumM) {
@@ -174,6 +179,21 @@ public:
     // Must be set before the build.
     void SetLevel0DoubleBudget(bool enabled) { level0_double_budget_ = enabled; }
     bool GetLevel0DoubleBudget() const { return level0_double_budget_; }
+
+    // How many candidate vectors the neighbour scan runs ahead with prefetches.
+    //
+    // The default is L1_CACHE_SIZE / vector-size, i.e. "keep about one L1 of candidates in
+    // flight". That budget assumed each PrefetchVec covers a whole vector; it did not until
+    // recently (it touched only the first cache line), so the effective depth was 1/8 of the
+    // intended one. Now that a whole vector is prefetched, the same step count issues 8x the
+    // prefetch instructions -- at the default 64 vectors and d=128 that is 512 in a single
+    // burst, well past the number of outstanding misses an Apple core tracks, so the tail is
+    // simply dropped. Whether a shallower pipeline does better is an empirical question, hence
+    // this setter. 0 restores the computed default.
+    void SetPrefetchStep(size_t vectors_ahead) {
+        prefetch_step_ = vectors_ahead > 0 ? vectors_ahead : DefaultPrefetchStep();
+    }
+    size_t GetPrefetchStep() const { return prefetch_step_; }
 
     size_t GetSizeInBytes() const { return sizeof(M_) + sizeof(ef_construction_) + data_store_.GetSizeInBytes(); }
 

@@ -53,8 +53,25 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
             const char *raw = std::getenv("INFINITY_HNSW_LEVEL0_DOUBLE_BUDGET");
             return raw != nullptr && std::strcmp(raw, "1") == 0;
         }();
+        // Prefetch pipeline depth, in candidate vectors run ahead. 0/unset keeps the computed
+        // default. Purely a memory hint, so no value can change the graph -- which makes the
+        // graph-hash gate an exact check on this knob rather than merely a strong one.
+        const std::size_t prefetch_step = [] {
+            const char *raw = std::getenv("INFINITY_HNSW_PREFETCH_STEP");
+            if (raw == nullptr) {
+                return std::size_t{0};
+            }
+            char *parse_end = nullptr;
+            const unsigned long long parsed = std::strtoull(raw, &parse_end, 10);
+            if (parse_end == raw || *parse_end != '\0' || parsed > 4096) {
+                return std::size_t{0};
+            }
+            return static_cast<std::size_t>(parsed);
+        }();
         index->SetPruneHeadroom(prune_headroom);
         index->SetLevel0DoubleBudget(level0_double_budget);
+        index->SetPrefetchStep(prefetch_step);
+        std::cout << "infinity_prefetch_step=" << index->GetPrefetchStep() << '\n';
         // Echo what was actually applied, not what was requested: SetPruneHeadroom clamps, so
         // a run's record must come from the index or it can disagree with the graph produced.
         std::cout << "infinity_prune_headroom=" << index->GetPruneHeadroom() << '\n';

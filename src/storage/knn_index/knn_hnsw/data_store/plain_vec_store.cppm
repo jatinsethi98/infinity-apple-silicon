@@ -123,7 +123,12 @@ public:
 
     const OtherDataType *GetVecToQuery(size_t idx, const Meta &meta) const { return GetVec(idx, meta); }
 
-    void Prefetch(VertexType vec_i, const Meta &meta) const { SIMDPrefetch(reinterpret_cast<const void *>(GetVec(vec_i, meta))); }
+    // Prefetch the WHOLE vector, not just its first cache line. A d=128 float embedding is 512
+    // bytes = 8 lines, and the distance kernel reads all of them immediately, so a single-line
+    // hint leaves 7/8 of the stall in place. See SIMDPrefetchRange for the measurement.
+    void Prefetch(VertexType vec_i, const Meta &meta) const {
+        SIMDPrefetchRange(reinterpret_cast<const void *>(GetVec(vec_i, meta)), meta.GetVecSizeInBytes());
+    }
 
 protected:
     ArrayPtr<OtherDataType, OwnMem> ptr_;
