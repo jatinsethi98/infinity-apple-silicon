@@ -161,4 +161,5 @@ vcpkg_installed/
 # Apple Silicon benchmark outputs (regenerate with scripts/bench/run_baseline.py)
 scripts/bench/results/
 scripts/bench/results-ab/
+scripts/bench/results-scan/
 scripts/bench/__pycache__/

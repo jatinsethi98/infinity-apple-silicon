@@ -129,11 +129,21 @@ def build_plain_argv(binary, dataset, n, d, m, efc, ef_search, chunk,
     ]
 
 
-def run_plain(argv, timeout):
-    """Run argv as an ordinary subprocess. No barriers, no supervisor."""
+def run_plain(argv, timeout, env_extra=None):
+    """Run argv as an ordinary subprocess. No barriers, no supervisor.
+
+    env_extra, when given, is overlaid on the inherited environment. It exists so a
+    caller can A/B a *runtime knob* (an env-var-driven setting) using ONE binary for
+    both arms, which removes codegen as a confound entirely -- the strongest form of
+    the paired experiment available."""
     start = time.monotonic_ns()
+    env = None
+    if env_extra:
+        env = dict(os.environ)
+        env.update({str(k): str(v) for k, v in env_extra.items()})
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                              env=env)
         return {"stdout": proc.stdout, "stderr": proc.stderr,
                 "returncode": proc.returncode,
                 "wall_ns": time.monotonic_ns() - start, "timed_out": False}

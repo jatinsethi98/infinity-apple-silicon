@@ -83,16 +83,35 @@ def t95(df):
 # --------------------------------------------------------------------------- #
 # one invocation
 # --------------------------------------------------------------------------- #
-def run_one(binary, args, sidecar_path):
+def parse_env_pairs(items, arm_name):
+    """Turn a list of 'KEY=VALUE' strings into a dict, rejecting malformed entries loudly.
+    An unnoticed typo here would silently measure control-vs-control, so this refuses
+    rather than warns."""
+    out = {}
+    for item in items or []:
+        if "=" not in item:
+            raise SystemExit(f"--{arm_name}-env expects KEY=VALUE, got {item!r}")
+        k, v = item.split("=", 1)
+        k = k.strip()
+        if not k:
+            raise SystemExit(f"--{arm_name}-env has an empty key: {item!r}")
+        out[k] = v
+    return out
+
+
+def run_one(binary, args, sidecar_path, env_extra=None):
     """Run one harness binary once in a fresh process. Both arms are Infinity, so the
     stdout key prefix is `infinity_` for both -- that is exactly why run_baseline.py's
-    two-engine parser cannot be reused here."""
+    two-engine parser cannot be reused here.
+
+    env_extra lets the two arms differ by a runtime knob rather than by binary, so an
+    env-driven setting can be A/B'd with ONE executable and zero codegen difference."""
     argv = campaign.build_plain_argv(
         binary, args.dataset, args.n, args.d, args.m, args.efc,
         args.ef_list[0],                # argv efSearch only sets the echoed config line
         args.chunk_size, args.query_count, args.participants, args.build_grain,
         sidecar_path)
-    res = campaign.run_plain(argv, timeout=args.timeout)
+    res = campaign.run_plain(argv, timeout=args.timeout, env_extra=env_extra)
     if res["returncode"] == campaign.USAGE_EXIT_CODE and not res["timed_out"]:
         raise SystemExit(
             f"{binary} rejected the 12-arg plain invocation (exit {campaign.USAGE_EXIT_CODE}). "
@@ -135,6 +154,8 @@ def run_one(binary, args, sidecar_path):
         "cold_build_ns_present": cold_ns is not None,
         "wall_ns": res["wall_ns"],
         "recall_at_10": recall,
+        "env_extra": dict(env_extra or {}),
+        "prefetch_step": g("prefetch_step", int),
         "graph_sha256": kv.get("infinity_graph_sha256") or kv.get("graph_sha256"),
         "graph_directed_edges": g("graph_directed_edges", int),
         "build_buckets_per_worker": g("build_buckets_per_worker", int),
@@ -234,6 +255,11 @@ def main():
     p.add_argument("--results-root", default=os.path.join(here, "results-ab"))
     p.add_argument("--control-bin", required=True, help="baseline Infinity binary")
     p.add_argument("--candidate-bin", required=True, help="Infinity binary under test")
+    p.add_argument("--control-env", action="append", metavar="KEY=VALUE",
+                   help="env var set for the control arm only (repeatable). Lets a runtime "
+                        "knob be A/B'd with one binary on both arms.")
+    p.add_argument("--candidate-env", action="append", metavar="KEY=VALUE",
+                   help="env var set for the candidate arm only (repeatable)")
     args = p.parse_args()
 
     args.ef_list = [int(x) for x in args.ef.split(",") if x.strip()]
@@ -241,10 +267,18 @@ def main():
                        ("candidate-bin", args.candidate_bin)):
         if not (os.path.exists(path) and os.access(path, os.X_OK)):
             raise SystemExit(f"{name} not found or not executable: {path}")
-    if os.path.realpath(args.control_bin) == os.path.realpath(args.candidate_bin):
-        print("WARNING: control and candidate are the SAME file. This measures the "
-              "harness noise floor, which is a useful thing to do -- expect a verdict "
-              "of INDISTINGUISHABLE and a CI half-width you can quote as the floor.",
+    env_arms = {"control": parse_env_pairs(args.control_env, "control"),
+                "candidate": parse_env_pairs(args.candidate_env, "candidate")}
+    same_bin = os.path.realpath(args.control_bin) == os.path.realpath(args.candidate_bin)
+    if same_bin and env_arms["control"] == env_arms["candidate"]:
+        print("WARNING: control and candidate are the SAME file with the SAME env. This "
+              "measures the harness noise floor, which is a useful thing to do -- expect a "
+              "verdict of INDISTINGUISHABLE and a CI half-width you can quote as the floor.",
+              file=sys.stderr)
+    elif same_bin:
+        print(f"NOTE: one binary, two envs -- codegen is identical by construction.\n"
+              f"      control  env: {env_arms['control'] or '(inherited only)'}\n"
+              f"      candidate env: {env_arms['candidate'] or '(inherited only)'}",
               file=sys.stderr)
 
     ensure_dataset(args.dataset, args.n, args.d, args.seed)
@@ -279,7 +313,7 @@ def main():
         print(f"\n--- block {block} (order: {' -> '.join(order)}) ---")
         for arm in order:
             sidecar = os.path.join(run_dir, f"sidecar-{arm}-b{block}.json")
-            r = run_one(arms[arm], args, sidecar)
+            r = run_one(arms[arm], args, sidecar, env_extra=env_arms[arm])
             r["arm"] = arm
             r["block"] = block
             r["order"] = "-".join(order)
@@ -328,6 +362,8 @@ def main():
             "qps": spread([r["qps"] for r in ar if r.get("qps")]),
             "graph_sha256_distinct": graph_hashes,
             "graph_directed_edges": ar[0]["graph_directed_edges"] if ar else None,
+            "prefetch_step_distinct": sorted({r["prefetch_step"] for r in ar
+                                              if r.get("prefetch_step") is not None}),
         }
 
     # Recall movement is reported but NOT folded into the timing verdict: a graph-neutral
@@ -348,6 +384,7 @@ def main():
                     "blocks", "order_seed", "chunk_size", "query_count", "build_grain",
                     "timeout")},
         "binaries": {"control": args.control_bin, "candidate": args.candidate_bin},
+        "env_arms": env_arms,
         "host": host,
         "runs": runs,
         "aggregate": agg,
