@@ -115,18 +115,14 @@ parity is met at every efSearch. Equal-param detail: Infinity **37.944 s** (rel 
 0.4%) vs FAISS **64.288 s** (rel MAD 0.4%); QPS 24,271 vs 17,799; p50 latency 275 us
 vs 376 us.
 
-**This is now the number to beat: 1.344x at matched recall.** Reaching the project's
->=1.5x goal needs a further ~10.4% off Infinity's build (47.680 s -> <=42.725 s).
+**Superseded 2026-09-02 (later the same day) — see "Iso-recall, on published ground truth" below.
+The 1.344x figure is now understood to be an artifact of the recall instrument, not a property of
+the two engines. The current matched-recall figure is 1.523x.**
 
-Where that is likely to come from, per a 1M/12-thread profile of the current build:
-53% of active worker time is in the L2 distance kernels and **38% is SearchLayer's own
-control flow** (frontier heap operations, visited tests, neighbour scan), which nothing
-has touched yet. Everything else is noise -- all lock traffic ~1%, all malloc ~0.5%,
-`__bzero` 0.26%. Note the kernel is latency-bound, not FP-bound: scattered candidate
-reads cost 64.8 ns per distance versus 9.2 ns sequential at identical arithmetic, which
-is why fusing the multiply-add (48 -> 32 FP ops) measured as nothing. Widening the
-kernel to 8 candidates in flight is worth only ~1.07x once whole-vector prefetch is in
-place, so it is not the next lever.
+That profile has been re-taken and decomposed; the 53%/38% split above is stale (it predates the
+whole-vector prefetch fix) and the decomposition superseded the guesses built on it. See
+[SEARCHLAYER_DECOMPOSITION.md](SEARCHLAYER_DECOMPOSITION.md) for the current profile, the exact
+traversal counts, the two changes that came out of it, and the five hypotheses it killed.
 
 ## Reproduce every number (one command each)
 ```bash
@@ -175,3 +171,129 @@ The 200k dataset is the first 102,400,000 bytes (200,000×128 f32) of SIFT1M `ba
   set and provided groundtruth (already downloaded to datasets/sift1m/query.f32 and
   groundtruth.i32, but not yet used by the harness) is the single highest-value improvement to
   this mechanism.
+
+## Iso-recall, on published ground truth (2026-09-02, supersedes Task 3)
+
+Two independent things were wrong with the 1.344x figure, and they were worth about the same
+amount.
+
+### 1. The recall instrument was wrong, so the operating point was wrong
+
+Every recall figure above comes from the harness self-audit: **64 synthetic queries**, uniform in
+`[0,1)` per coordinate, truth derived by exhaustive search. It is exact and deterministic, but it
+is out-of-distribution for SIFT (canonical descriptors are integer-valued on a scale of tens) and
+it is coarse: recall@10 over 64 queries has only 640 neighbour slots, so its finest step is
+1/640 = 0.0016 and one query's full result set is worth 0.0156. `AuditHnswD0RecallExternal`, which scores against the
+**published** SIFT1M 10,000-query set and ground truth, had existed and been unit-tested since
+`fcd910c5c` but was never called by the benchmark. It is wired in now.
+
+Both engines scored by the same code over the same 10,000 published queries (identical
+`queries_sha256` and `groundtruth_sha256` in every run), n=1,000,000, M=32, 12 threads, 3 builds
+per point:
+
+| efSearch | Infinity efC=200 | FAISS efC=200 | Infinity − FAISS | the self-audit said |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 | 0.94187 | 0.94328 | −0.00141 | — |
+| 64 | 0.98231 | 0.98314 | −0.00083 | −0.0172 |
+| 128 | 0.99560 | 0.99605 | −0.00045 | −0.0266 |
+| 256 | 0.99925 | 0.99930 | −0.00005 | — |
+| 512 | 0.99996 | 0.99995 | +0.00001 | — |
+
+The real deficit at equal parameters is **0.0005–0.0014**, twenty to sixty times smaller than the
+self-audit reported. Build-to-build variance shrinks the same way: ~0.0005 over the published
+queries, against a 0.041 spread over 35 recorded builds on the 64-query audit.
+
+Sweeping Infinity's efConstruction against FAISS@200 on published truth (3 builds per point;
+efSearch 512 is excluded from the decision because both engines exceed 0.9999 there, where
+0.00001 is one query in 10,000):
+
+| Infinity efC | ef32 | ef64 | ef128 | ef256 | ≥ FAISS at all deciding points |
+| ---: | ---: | ---: | ---: | ---: | :--: |
+| 200 | −0.00141 | −0.00083 | −0.00045 | −0.00005 | no |
+| 210 | −0.00009 | −0.00037 | −0.00028 | −0.00003 | no |
+| 225 | +0.00062 | +0.00011 | −0.00001 | +0.00004 | no (short by 0.1 query per 10,000) |
+| 230 | +0.00120 | +0.00043 | −0.00002 | +0.00006 | no |
+| **235** | **+0.00129** | **+0.00059** | **+0.00000** | **+0.00004** | **YES** |
+| 240 | +0.00196 | +0.00039 | +0.00008 | +0.00008 | YES |
+
+**The iso-recall point is efConstruction≈235, not 250.** efC=225 is statistically
+indistinguishable from parity and is quoted below as the lower bracket.
+
+### 2. Two bit-identical build-time fixes
+
+Both came out of instrumenting `SearchLayer`'s traversal
+([SEARCHLAYER_DECOMPOSITION.md](SEARCHLAYER_DECOMPOSITION.md)), and both leave the graph
+bit-identical (`infinity_graph_sha256=50c8ffda...` at the n=100,000 determinism gate):
+
+| change | paired A/B | blocks |
+| --- | --- | ---: |
+| Do not prefetch a candidate already in the visited set (57.0% of prefetched candidates were being discarded unread) | **0.9626** of previous, 95% CI [0.9577, 0.9676] | 5 |
+| `SIMDPrefetchRange` stride 64 → 128 bytes (`sysctl hw.cachelinesize` is 128 on Apple M-series, so half the `prfm` were redundant) | **0.9723** of previous, 95% CI [0.9668, 0.9780] | 15 |
+
+### The result
+
+One paired campaign, 6 randomized blocks, quiet machine, all five arms measured against each other
+so every ratio below is paired within the same thermal state. FAISS is the from-source
+Accelerate-linked build (`build/bench-faiss-src/faiss_hnsw_d0`).
+
+| arm | median build | rel MAD | ratio vs FAISS@200 | speedup | 95% CI on speedup |
+| --- | ---: | ---: | ---: | ---: | --- |
+| FAISS efC=200 | 59.955 s | 0.28% | 1.0000 | — | — |
+| **Infinity efC=235, both fixes** | **39.366 s** | 0.37% | 0.6565 | **1.523x** | **[1.514x, 1.532x]** |
+| Infinity efC=225, both fixes | 37.800 s | 0.49% | 0.6309 | 1.585x | [1.575x, 1.595x] |
+| Infinity efC=235, original code | 42.572 s | 0.33% | 0.7109 | 1.407x | [1.396x, 1.418x] |
+| Infinity efC=250, original code | 45.809 s | 0.14% | 0.7621 | 1.312x | [1.306x, 1.319x] |
+
+The last row reproduces the previous headline (1.312x here against 1.344x recorded earlier, a
+different day and a busier machine), which is what licenses reading the others as a change rather
+than as a new measurement.
+
+**Iso-recall result: Infinity builds SIFT1M 1.523x faster than FAISS at matched published-truth
+recall, 95% CI [1.514x, 1.532x].** The >=1.5x goal is met at the strict criterion (Infinity ≥ FAISS
+at every non-saturated efSearch); at the indistinguishable-from-parity bracket, efC=225, it is
+1.585x.
+
+Where the 13.85% came from, each ratio paired within that one campaign:
+
+| contribution | ratio | improvement | 95% CI |
+| --- | ---: | ---: | --- |
+| operating point efC 250 → 235 (the recall-instrument fix) | 0.9328 | 6.72% | [5.74%, 7.70%] |
+| the two code fixes, at fixed efC=235 | 0.9235 | 7.65% | [7.39%, 7.90%] |
+| **total, efC=250 original → efC=235 with both fixes** | **0.8615** | **13.85%** | **[13.16%, 14.54%]** |
+
+The two halves are almost exactly equal, which is the summary of the whole exercise: half the win
+was in the code and half was in the ruler.
+
+### Reproduce
+
+```bash
+# Recall parity on published ground truth (both engines, same audit code, same queries)
+export HNSW_D0_EXTERNAL_QUERIES=$PWD/../datasets/sift1m/query.f32
+export HNSW_D0_EXTERNAL_GROUNDTRUTH=$PWD/../datasets/sift1m/groundtruth.i32
+python3 scripts/bench/iso_recall.py \
+  --dataset $PWD/../datasets/sift1m/base.f32 --n 1000000 --d 128 --m 32 \
+  --faiss-efc 200 --infinity-efc 200,225,235,240 --participants 12 --pairs 3 \
+  --infinity-bin build/bench/infinity_hnsw_d0 --faiss-bin build/bench-faiss-src/faiss_hnsw_d0
+
+# The headline build-time campaign (audit OFF: unset the two variables above, so a 10k-query
+# audit cannot warm the machine before the next arm's build)
+python3 scripts/bench/knob_scan.py \
+  --dataset $PWD/../datasets/sift1m/base.f32 --n 1000000 --d 128 --m 32 \
+  --participants 12 --blocks 6 --require-ac --label headline-isorecall \
+  --arm "faiss200:bin=build/bench-faiss-src/faiss_hnsw_d0,efc=200" \
+  --arm "inf235_new:bin=build/bench/infinity_hnsw_d0,efc=235" \
+  --reference faiss200
+```
+
+### Limitations specific to these numbers
+
+- **One host, one session.** Every arm above was measured in the same campaign on a quiet machine,
+  so the ratios are internally paired and comparable; the absolute seconds are not portable.
+- **`participants=12` builds are order-nondeterministic**, so each arm's graph differs run to run.
+  Recall is therefore reported as a median over repeated builds, and the bit-identity gate is run
+  separately at `participants=1`.
+- **Recall parity is decided at efSearch 32/64/128/256** and is a median over 3 builds per point.
+  The residual differences at the crossing are on the order of one query in 10,000; a per-query
+  paired equivalence test over more build pairs would be the next tightening.
+- **The published-truth audit only runs at n=1,000,000**, by design — the published IDs address the
+  full canonical base, so a prefix would silently address the wrong rows.
