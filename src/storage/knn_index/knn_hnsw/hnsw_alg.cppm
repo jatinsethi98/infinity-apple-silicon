@@ -44,6 +44,135 @@ import column_def;
 
 namespace infinity {
 
+#ifdef INFINITY_HNSW_INSTRUMENT
+// SearchLayer decomposition counters. OFF unless the build defines
+// INFINITY_HNSW_INSTRUMENT, so the shipping binary contains none of this.
+//
+// WHY COUNTS AND NOT TIMES. A sampling profiler attributes ~69% of active worker time to
+// SearchLayer's own frame, but SearchLayer is an inlining blob: commit_candidate, the
+// frontier heap's push/pop, the visited bit test, GetNeighbors, and the prefetch issue
+// loop are all inside it, so that one number says nothing about which of them costs the
+// time. Timing sub-regions from inside the loop is not an option either -- the only cheap
+// clock here is CNTVCT_EL0 at 24 MHz (41.7 ns per tick), which is coarser than the
+// operations being separated. Counts, by contrast, are exact, and combined with the
+// per-operation costs the machine can be measured at independently they give a cost model
+// that either accounts for the 69% or fails to -- and a model that fails to is itself the
+// finding.
+//
+// These counters perturb the traversal's TIME (roughly ten added increments per neighbour)
+// but not its VALUES: nothing here feeds a distance, a comparison, or a branch that
+// decides an edge. The graph hash gate proves that claim on every instrumented run.
+export struct HnswSearchLayerCounters {
+    u64 calls{};                 // SearchLayer invocations
+    u64 calls_layer0{};          // ... of which at layer 0
+    u64 pops{};                  // frontier pops that were not the early-exit break
+    u64 pops_break{};            // calls that ended on the distance-bound break
+    u64 pushes{};                // commit_candidate calls that pushed
+    u64 commit_rejected{};       // commit_candidate calls that did not push
+    u64 neighbors_seen{};        // neighbour slots iterated
+    u64 skip_out_of_range{};     // rejected by n_idx >= cur_vec_num
+    u64 skip_visited{};          // rejected by the visited bit
+    u64 dist_batch4_calls{};     // Batch4 kernel invocations
+    u64 dist_scalar_tail{};      // scalar distance calls for the <4 pending tail
+    u64 dist_scalar_path{};      // scalar distance calls on the non-Batch4 scan
+    u64 prefetch_vec_calls{};    // PrefetchVec calls (x8 lines each at d=128)
+    u64 prefetch_wasted{};       // ... issued for a vector later skipped as visited
+    u64 prefetch_suppressed{};   // hints NOT issued because the candidate was already visited
+    u64 dist_batch4_tail_calls{};// 4-wide kernel calls covering a <4 tail (padded lanes)
+    u64 heap_size_sum_at_push{}; // for the sift-work estimate
+    u64 heap_size_sum_at_pop{};
+    u64 heap_log2_sum_at_push{}; // sum of bit_width(size): sift-up depth bound
+    u64 heap_log2_sum_at_pop{};  // sum of bit_width(size): sift-down depth
+    u64 heap_size_max{};
+    u64 visited_alloc_bytes{};   // sum of the per-call visited bitmap size
+    // Power-of-two histograms. Index i counts values in [2^(i-1), 2^i).
+    std::array<u64, 24> pops_per_call{};
+    std::array<u64, 8> neighbor_size_hist{};
+
+    void Merge(const HnswSearchLayerCounters &o) {
+        calls += o.calls;
+        calls_layer0 += o.calls_layer0;
+        pops += o.pops;
+        pops_break += o.pops_break;
+        pushes += o.pushes;
+        commit_rejected += o.commit_rejected;
+        neighbors_seen += o.neighbors_seen;
+        skip_out_of_range += o.skip_out_of_range;
+        skip_visited += o.skip_visited;
+        dist_batch4_calls += o.dist_batch4_calls;
+        dist_scalar_tail += o.dist_scalar_tail;
+        dist_scalar_path += o.dist_scalar_path;
+        prefetch_vec_calls += o.prefetch_vec_calls;
+        prefetch_wasted += o.prefetch_wasted;
+        prefetch_suppressed += o.prefetch_suppressed;
+        dist_batch4_tail_calls += o.dist_batch4_tail_calls;
+        heap_size_sum_at_push += o.heap_size_sum_at_push;
+        heap_size_sum_at_pop += o.heap_size_sum_at_pop;
+        heap_log2_sum_at_push += o.heap_log2_sum_at_push;
+        heap_log2_sum_at_pop += o.heap_log2_sum_at_pop;
+        heap_size_max = std::max(heap_size_max, o.heap_size_max);
+        visited_alloc_bytes += o.visited_alloc_bytes;
+        for (size_t i = 0; i < pops_per_call.size(); ++i) {
+            pops_per_call[i] += o.pops_per_call[i];
+        }
+        for (size_t i = 0; i < neighbor_size_hist.size(); ++i) {
+            neighbor_size_hist[i] += o.neighbor_size_hist[i];
+        }
+    }
+};
+
+// Each worker owns its block, so the hot path is a plain non-atomic increment. Blocks are
+// registered once, on the thread's first SearchLayer call, and read back after the build
+// while the threads still exist -- so no thread-exit hook and no atomics anywhere.
+struct HnswInstrumentationRegistry {
+    std::mutex mutex;
+    std::vector<HnswSearchLayerCounters *> blocks;
+};
+
+inline HnswInstrumentationRegistry &HnswInstrRegistry() {
+    static HnswInstrumentationRegistry registry;
+    return registry;
+}
+
+inline HnswSearchLayerCounters &HnswInstrLocal() {
+    static thread_local HnswSearchLayerCounters *self = [] {
+        static thread_local HnswSearchLayerCounters storage;
+        HnswInstrumentationRegistry &registry = HnswInstrRegistry();
+        std::lock_guard<std::mutex> guard(registry.mutex);
+        registry.blocks.push_back(&storage);
+        return &storage;
+    }();
+    return *self;
+}
+
+export HnswSearchLayerCounters HnswInstrumentationTotals() {
+    HnswSearchLayerCounters total;
+    HnswInstrumentationRegistry &registry = HnswInstrRegistry();
+    std::lock_guard<std::mutex> guard(registry.mutex);
+    for (const HnswSearchLayerCounters *block : registry.blocks) {
+        total.Merge(*block);
+    }
+    return total;
+}
+
+export void HnswInstrumentationReset() {
+    HnswInstrumentationRegistry &registry = HnswInstrRegistry();
+    std::lock_guard<std::mutex> guard(registry.mutex);
+    for (HnswSearchLayerCounters *block : registry.blocks) {
+        *block = HnswSearchLayerCounters{};
+    }
+}
+
+// Bucket a value into a power-of-two histogram: 0 -> 0, 1 -> 1, 2..3 -> 2, 4..7 -> 3, ...
+inline size_t HnswInstrBucket(u64 value, size_t buckets) {
+    return std::min<size_t>(buckets - 1, static_cast<size_t>(std::bit_width(value)));
+}
+
+#define INFINITY_HNSW_INSTR(stmt) do { stmt; } while (false)
+#else
+#define INFINITY_HNSW_INSTR(stmt) do { } while (false)
+#endif
+
 struct HnswCompressionTargetTag {};
 
 // NOTE: an earlier revision replaced SearchLayer's `std::vector<bool> visited` with a
@@ -109,6 +238,22 @@ public:
         return vec_bytes > 0 ? std::max<size_t>(1, L1_CACHE_SIZE / vec_bytes) : DEFAULT_PREFETCH_SIZE;
     }
 
+    // How many candidate vectors the neighbour scan prefetches on each iteration AFTER the
+    // first. `prefetch_step_` alone cannot express the distinction that matters:
+    //
+    //   prime = step, per_iter = step   -- the historical shape. Iteration 0 issues `step`
+    //       vectors' worth of prefetches, iteration 1 issues `step` more, and so on, so the
+    //       whole neighbour list is prefetched within the first ceil(size/step) iterations.
+    //       At the default step of L1_CACHE_SIZE/512 = 64 and a level-0 list of at most 64
+    //       entries that is the ENTIRE list -- up to 64 x 8 = 512 `prfm` back to back -- issued
+    //       before a single distance is computed.
+    //   prime = K,    per_iter = 1      -- a rolling window: K vectors in flight at all times,
+    //       advanced by exactly one vector per neighbour visited, so prefetch issue interleaves
+    //       with the distance work instead of preceding all of it.
+    //
+    // 0 means "same as prime", which reproduces the historical shape exactly.
+    size_t PrefetchPerIter() const { return prefetch_per_iter_ ? prefetch_per_iter_ : prefetch_step_; }
+
     static std::pair<size_t, size_t> GetMmax(size_t M) {
         constexpr size_t kMaximumM = static_cast<size_t>(std::numeric_limits<VertexListSize>::max()) / 2;
         if (M < 2 || M > kMaximumM) {
@@ -126,7 +271,8 @@ public:
           build_failed_(other.build_failed_.exchange(false, std::memory_order_acq_rel)), level_generator_(std::move(other.level_generator_)),
           level_cursor_(std::exchange(other.level_cursor_, 0)),
           data_store_(std::move(other.data_store_)), distance_(std::move(other.distance_)),
-          prefetch_step_(L1_CACHE_SIZE / data_store_.vec_store_meta().GetVecSizeInBytes()) {
+          prefetch_step_(L1_CACHE_SIZE / data_store_.vec_store_meta().GetVecSizeInBytes()),
+          prefetch_per_iter_(std::exchange(other.prefetch_per_iter_, 0)) {
         static_assert(std::is_nothrow_move_constructible_v<DataStore>);
         static_assert(std::is_nothrow_move_constructible_v<Distance>);
     }
@@ -145,6 +291,7 @@ public:
             data_store_ = std::move(other.data_store_);
             distance_ = std::move(other.distance_);
             prefetch_step_ = L1_CACHE_SIZE / data_store_.vec_store_meta().GetVecSizeInBytes();
+            prefetch_per_iter_ = std::exchange(other.prefetch_per_iter_, 0);
         }
         return *this;
     }
@@ -194,6 +341,46 @@ public:
         prefetch_step_ = vectors_ahead > 0 ? vectors_ahead : DefaultPrefetchStep();
     }
     size_t GetPrefetchStep() const { return prefetch_step_; }
+
+    // How many vectors the neighbour scan prefetches per iteration after the first; see
+    // PrefetchPerIter(). 0 restores "same as the step", i.e. the historical burst shape.
+    void SetPrefetchPerIter(size_t vectors_per_iter) { prefetch_per_iter_ = vectors_per_iter; }
+    size_t GetPrefetchPerIter() const { return PrefetchPerIter(); }
+
+    // Skip the prefetch for a candidate the traversal is already going to discard.
+    //
+    // The prefetch cursor runs AHEAD of the visited test, so it issues a whole vector's worth
+    // of prefetches for every neighbour slot -- including the ones the scan will drop on
+    // `visited[n_idx]` a few iterations later without reading a single byte of the vector.
+    // Instrumented at n=100000/efC=200: 297,570,050 of 521,895,571 prefetched candidates
+    // (57.0%) were then skipped as visited. Testing the same bit before issuing the hint
+    // removes that traffic. The test is read-only and the hint has no semantics, so the graph
+    // is unchanged -- the hash gate proves it rather than merely suggesting it.
+    //
+    // Conservative in one direction only: a candidate unvisited when its prefetch is issued
+    // can be visited by the time the scan reaches it, so some waste remains. It never
+    // suppresses a prefetch that is needed.
+    void SetPrefetchSkipVisited(bool enabled) { prefetch_skip_visited_ = enabled; }
+    bool GetPrefetchSkipVisited() const { return prefetch_skip_visited_; }
+
+    // Send the final <4 candidates of a neighbour scan through the 4-wide kernel instead of
+    // the 1-wide one, padding the unused lanes with an already-pending vertex and discarding
+    // their results.
+    //
+    // The batch only fires when four unvisited candidates have accumulated, and 57% of
+    // neighbours are skipped as visited, so the tail is not a rare remainder: instrumented at
+    // n=100000/efC=200 it is 30,261,885 of 224,325,521 distance evaluations (13.5%), all of
+    // them on the scalar kernel. Padding is safe because the lanes read a vertex already in
+    // the pending array (never out of bounds) and because F32L2SSEBatch4 is bit-identical to
+    // F32L2SSE per lane -- native_simd_l2_smoke asserts exactly that
+    // (batch_bit_mismatches=0 over 69,824 outputs), so the distances committed do not change.
+    void SetBatchTailPadding(bool enabled) { batch_tail_padding_ = enabled; }
+    bool GetBatchTailPadding() const { return batch_tail_padding_; }
+
+    // Prefetch the neighbour list in SearchLayerNearest's greedy descent, which had none. See the
+    // comment at the loop. Bit-identical; the graph hash gate proves it.
+    void SetNearestPrefetch(bool enabled) { nearest_prefetch_ = enabled; }
+    bool GetNearestPrefetch() const { return nearest_prefetch_; }
 
     size_t GetSizeInBytes() const { return sizeof(M_) + sizeof(ef_construction_) + data_store_.GetSizeInBytes(); }
 
@@ -302,19 +489,57 @@ protected:
         size_t cur_vec_num = data_store_.cur_vec_num();
         std::vector<bool> visited(cur_vec_num, false);
         visited[enter_point] = true;
+#ifdef INFINITY_HNSW_INSTRUMENT
+        HnswSearchLayerCounters &instr = HnswInstrLocal();
+        ++instr.calls;
+        instr.calls_layer0 += (layer_idx == 0) ? 1 : 0;
+        instr.visited_alloc_bytes += (cur_vec_num + 7) / 8;
+        u64 instr_pops_this_call = 0;
+        // The enter_point push happened above, before the counters were in scope.
+        ++instr.pushes;
+        instr.heap_size_sum_at_push += 1;
+        instr.heap_log2_sum_at_push += 1;
+#endif
         auto commit_candidate = [&](DistanceType dist, VertexType vertex) {
             if (result_handler.GetSize(0) < result_n || dist <= result_handler.GetDistance0(0)) {
+                INFINITY_HNSW_INSTR({
+                    const u64 size_before = static_cast<u64>(candidate.size());
+                    ++instr.pushes;
+                    instr.heap_size_sum_at_push += size_before + 1;
+                    instr.heap_log2_sum_at_push += std::bit_width(size_before + 1);
+                    instr.heap_size_max = std::max<u64>(instr.heap_size_max, size_before + 1);
+                });
                 candidate.emplace(-dist, vertex);
                 add_result(dist, vertex);
+            } else {
+                INFINITY_HNSW_INSTR(++instr.commit_rejected);
             }
         };
 
+        // Prefetch pipeline shape. Both are invariant for the whole traversal, so they are read
+        // once here rather than out of `this` inside the neighbour scan. See PrefetchPerIter()
+        // for what the pair means; prime == per_iter is the historical burst.
+        const size_t prefetch_prime = prefetch_step_;
+        const size_t prefetch_per_iter = PrefetchPerIter();
+        const bool prefetch_skip_visited = prefetch_skip_visited_;
+        const bool batch_tail_padding = batch_tail_padding_;
+
         while (!candidate.empty()) {
             const auto [minus_c_dist, c_idx] = candidate.top();
+            INFINITY_HNSW_INSTR({
+                const u64 size_before = static_cast<u64>(candidate.size());
+                instr.heap_size_sum_at_pop += size_before;
+                instr.heap_log2_sum_at_pop += std::bit_width(size_before);
+            });
             candidate.pop();
             if (result_handler.GetSize(0) == result_n && -minus_c_dist > result_handler.GetDistance0(0)) {
+                INFINITY_HNSW_INSTR(++instr.pops_break);
                 break;
             }
+            INFINITY_HNSW_INSTR({
+                ++instr.pops;
+                ++instr_pops_this_call;
+            });
 
             HnswVertexSharedLock lock;
             if constexpr (WithLock && OwnMem) {
@@ -323,17 +548,49 @@ protected:
             }
 
             const auto [neighbors_p, neighbor_size] = data_store_.GetNeighbors(c_idx, layer_idx);
-            auto visit_neighbors_scalar = [&] {
-                i32 prefetch_start = 0;
-                for (i32 i = 0; i < neighbor_size; ++i) {
-                    for (size_t j = prefetch_step_; prefetch_start < neighbor_size && j > 0; --j) {
-                        data_store_.PrefetchVec(neighbors_p[prefetch_start++]);
+            // Issue the next `count` candidate vectors' prefetches, stopping at the end of the
+            // list. `prefetch_start` is the shared cursor, so the window only ever moves forward.
+            INFINITY_HNSW_INSTR({
+                instr.neighbor_size_hist[HnswInstrBucket(static_cast<u64>(neighbor_size),
+                                                         instr.neighbor_size_hist.size())] += 1;
+            });
+            i32 prefetch_start = 0;
+            auto prefetch_drain = [&](size_t count) {
+                for (; prefetch_start < neighbor_size && count > 0; --count) {
+                    const VertexType prefetch_idx = neighbors_p[prefetch_start++];
+                    if (prefetch_skip_visited &&
+                        (prefetch_idx >= (VertexType)cur_vec_num || visited[prefetch_idx])) {
+                        INFINITY_HNSW_INSTR(++instr.prefetch_suppressed);
+                        continue;
                     }
+                    INFINITY_HNSW_INSTR(++instr.prefetch_vec_calls);
+                    data_store_.PrefetchVec(prefetch_idx);
+                }
+            };
+            auto visit_neighbors_scalar = [&] {
+                // `drain_count` is prime on the first iteration and per_iter afterwards. Written
+                // as an unconditional assignment rather than `if (i != 0)` so the default shape
+                // (prime == per_iter, where the assignment is a no-op) keeps the exact same
+                // instruction sequence it had before this became configurable.
+                size_t drain_count = prefetch_prime;
+                for (i32 i = 0; i < neighbor_size; ++i) {
+                    prefetch_drain(drain_count);
+                    drain_count = prefetch_per_iter;
                     VertexType n_idx = neighbors_p[i];
+                    INFINITY_HNSW_INSTR(++instr.neighbors_seen);
                     if (n_idx >= (VertexType)cur_vec_num || visited[n_idx]) {
+                        INFINITY_HNSW_INSTR({
+                            if (n_idx >= (VertexType)cur_vec_num) {
+                                ++instr.skip_out_of_range;
+                            } else {
+                                ++instr.skip_visited;
+                                instr.prefetch_wasted += (i < prefetch_start) ? 1 : 0;
+                            }
+                        });
                         continue;
                     }
                     visited[n_idx] = true;
+                    INFINITY_HNSW_INSTR(++instr.dist_scalar_path);
                     commit_candidate(distance_(query, n_idx, data_store_, query_i), n_idx);
                 }
             };
@@ -345,13 +602,21 @@ protected:
                     std::array<VertexType, 4> pending_vertices{};
                     std::array<DistanceType, 4> pending_distances{};
                     size_t pending_count = 0;
-                    i32 prefetch_start = 0;
+                    size_t drain_count = prefetch_prime;
                     for (i32 i = 0; i < neighbor_size; ++i) {
-                        for (size_t j = prefetch_step_; prefetch_start < neighbor_size && j > 0; --j) {
-                            data_store_.PrefetchVec(neighbors_p[prefetch_start++]);
-                        }
+                        prefetch_drain(drain_count);
+                        drain_count = prefetch_per_iter;
                         const VertexType n_idx = neighbors_p[i];
+                        INFINITY_HNSW_INSTR(++instr.neighbors_seen);
                         if (n_idx >= (VertexType)cur_vec_num || visited[n_idx]) {
+                            INFINITY_HNSW_INSTR({
+                                if (n_idx >= (VertexType)cur_vec_num) {
+                                    ++instr.skip_out_of_range;
+                                } else {
+                                    ++instr.skip_visited;
+                                    instr.prefetch_wasted += (i < prefetch_start) ? 1 : 0;
+                                }
+                            });
                             continue;
                         }
                         visited[n_idx] = true;
@@ -360,6 +625,7 @@ protected:
                             bool threshold_path_ran = false;
                             std::uint8_t exact_mask = 0;
                             if (!threshold_path_ran) {
+                                INFINITY_HNSW_INSTR(++instr.dist_batch4_calls);
                                 distance_.Batch4(query, pending_vertices, data_store_, pending_distances);
                             }
                             for (size_t lane = 0; lane < pending_count; ++lane) {
@@ -370,9 +636,24 @@ protected:
                             pending_count = 0;
                         }
                     }
-                    for (size_t lane = 0; lane < pending_count; ++lane) {
-                        const VertexType n_idx = pending_vertices[lane];
-                        commit_candidate(distance_(query, n_idx, data_store_, query_i), n_idx);
+                    if (batch_tail_padding && pending_count > 0) {
+                        // Repeat a pending vertex in the unused lanes: always a valid index, so
+                        // the kernel reads only in-bounds vectors, and the duplicate lanes'
+                        // distances are simply not committed.
+                        for (size_t lane = pending_count; lane < pending_vertices.size(); ++lane) {
+                            pending_vertices[lane] = pending_vertices[0];
+                        }
+                        INFINITY_HNSW_INSTR(++instr.dist_batch4_tail_calls);
+                        distance_.Batch4(query, pending_vertices, data_store_, pending_distances);
+                        for (size_t lane = 0; lane < pending_count; ++lane) {
+                            commit_candidate(pending_distances[lane], pending_vertices[lane]);
+                        }
+                    } else {
+                        for (size_t lane = 0; lane < pending_count; ++lane) {
+                            const VertexType n_idx = pending_vertices[lane];
+                            INFINITY_HNSW_INSTR(++instr.dist_scalar_tail);
+                            commit_candidate(distance_(query, n_idx, data_store_, query_i), n_idx);
+                        }
                     }
                 } else {
                     visit_neighbors_scalar();
@@ -381,6 +662,10 @@ protected:
                 visit_neighbors_scalar();
             }
         }
+        INFINITY_HNSW_INSTR({
+            instr.pops_per_call[HnswInstrBucket(instr_pops_this_call,
+                                                instr.pops_per_call.size())] += 1;
+        });
         result_handler.EndWithoutSort();
         EnsureBuildUsable();
         return {result_handler.GetSize(0), std::move(d_ptr), std::move(i_ptr)};
@@ -401,6 +686,17 @@ protected:
             }
 
             const auto [neighbors_p, neighbor_size] = data_store_.GetNeighbors(cur_p, layer_idx);
+            // This greedy descent had NO prefetch at all, unlike SearchLayer's neighbour scan: it
+            // walked the neighbour list computing one scattered distance at a time, so every
+            // iteration paid full memory latency with nothing in flight behind it. Every neighbour
+            // here IS visited (there is no visited set on this path), so the whole list is worth
+            // prefetching and none of it is wasted. Upper-layer degree is at most Mmax = M, so the
+            // burst is bounded and small. Prefetch is a hint, so the descent is unchanged.
+            if (nearest_prefetch_) {
+                for (i32 i = 0; i < neighbor_size; ++i) {
+                    data_store_.PrefetchVec(neighbors_p[i]);
+                }
+            }
             for (int i = neighbor_size - 1; i >= 0; --i) {
                 VertexType n_idx = neighbors_p[i];
                 auto n_dist = distance_(query, n_idx, data_store_, query_i);
@@ -1175,6 +1471,16 @@ protected:
 
 
     size_t prefetch_step_;
+    // 0 == "same as prefetch_step_" == the historical burst shape. See PrefetchPerIter().
+    size_t prefetch_per_iter_{0};
+    // ON by default: measured 0.9626 of the previous build time at n=1,000,000 / efC=250 /
+    // 12 threads, 95% CI [0.9577, 0.9676] over 5 paired randomized blocks, with the graph
+    // bit-identical (sha256 50c8ffda... at the n=100,000 determinism gate). Because it is
+    // graph-neutral no platform can observe a behaviour change from it, only a timing one --
+    // which is why it is safe to default on rather than gate per target.
+    bool prefetch_skip_visited_{true};
+    bool batch_tail_padding_{false};
+    bool nearest_prefetch_{false};
 
     std::optional<HnswLSGBuilder<DataType, DistanceType>> lsg_builder_{};
 

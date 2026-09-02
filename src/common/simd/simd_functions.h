@@ -43,11 +43,21 @@ inline void SIMDPrefetch(const void *ptr) { __builtin_prefetch(ptr, 0 /* rw: rea
 // roughly 90% of the scattered cost is exposed memory latency rather than arithmetic. That is
 // also why fusing the multiply-add (a 1.5x reduction in FP ops) changed nothing measurable.
 //
-// `bytes` is rounded up to whole lines. Line size is 64 on every arm64 Apple core and on x86-64;
-// assuming it is only ever a hint's granularity, so being wrong costs a redundant or missing
-// prefetch, never correctness.
+// `bytes` is rounded up to whole lines. The stride is only a hint's granularity, so getting it
+// wrong costs a redundant or a missing prefetch, never correctness -- which is why it can be
+// chosen per target rather than probed at runtime.
+//
+// Apple arm64 lines are 128 bytes, not 64: `sysctl hw.cachelinesize` reports 128 on M1 through
+// M4 (verified on this Mac15,7 M3 Pro). An earlier revision of this comment asserted 64 "on every
+// arm64 Apple core", and that was simply wrong. At a 64-byte stride a 512-byte embedding issued
+// EIGHT `prfm` where four cover the same four physical lines, so half of them were redundant hits
+// on a line fill already in flight.
 inline void SIMDPrefetchRange(const void *ptr, unsigned long bytes) {
+#if defined(__APPLE__) && defined(__aarch64__)
+    constexpr unsigned long kCacheLineBytes = 128;
+#else
     constexpr unsigned long kCacheLineBytes = 64;
+#endif
     const char *cursor = static_cast<const char *>(ptr);
     for (unsigned long offset = 0; offset < bytes; offset += kCacheLineBytes) {
         __builtin_prefetch(cursor + offset, 0 /* rw: read */, 3 /* locality: high */);

@@ -53,6 +53,17 @@ if(INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING AND
    NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
     message(FATAL_ERROR "The scalar reciprocal-pruning control requires an arm64-only build")
 endif()
+# SearchLayer decomposition counters. A sampling profiler puts ~69% of active worker time
+# in SearchLayer's own frame, but everything interesting is inlined into it, so that number
+# does not say which part costs the time. Turning this on compiles per-thread counters into
+# the traversal and makes the bridge emit them as infinity_instr_* keys. It perturbs TIME,
+# so an instrumented binary must never be used for a timing measurement -- configure a
+# SEPARATE build directory with it ON and keep the timing build clean.
+option(
+    INFINITY_HNSW_INSTRUMENT
+    "Compile SearchLayer traversal counters (slower; for decomposition, never for timing)"
+    OFF
+)
 set(
     INFINITY_NATIVE_HNSW_ALG_SOURCE
     "${INFINITY_ROOT}/src/storage/knn_index/knn_hnsw/hnsw_alg.cppm"
@@ -141,6 +152,10 @@ target_include_directories(
         "/opt/homebrew/opt/simde/include"
 )
 target_compile_definitions(infinity_native_hnsw PRIVATE SIMDE_ENABLE_NATIVE_ALIASES)
+if(INFINITY_HNSW_INSTRUMENT)
+    # PUBLIC: the bridge needs the same definition to see the exported dump entry points.
+    target_compile_definitions(infinity_native_hnsw PUBLIC INFINITY_HNSW_INSTRUMENT)
+endif()
 if(INFINITY_DISABLE_APPLE_HNSW_BATCH4_RECIPROCAL_PRUNING)
     target_compile_definitions(
         infinity_native_hnsw

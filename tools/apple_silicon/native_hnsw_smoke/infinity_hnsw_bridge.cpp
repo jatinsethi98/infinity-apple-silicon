@@ -1,5 +1,6 @@
 #include "hnsw_dev_bridge.h"
 #include "hnsw_d0_timing_probe.h"
+#include "hnsw_d0_external_truth.h"
 
 import std;
 import std.compat;
@@ -68,10 +69,57 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
             }
             return static_cast<std::size_t>(parsed);
         }();
+        // How many candidate vectors the neighbour scan prefetches per iteration AFTER the first.
+        // 0/unset means "same as the step", which is the historical burst shape: the step is
+        // drained on every iteration, so the whole neighbour list is prefetched up front. Setting
+        // this to 1 turns the same code into a rolling window of `step` vectors advanced one per
+        // neighbour. Also purely a memory hint, so the graph hash gates it exactly.
+        const std::size_t prefetch_per_iter = [] {
+            const char *raw = std::getenv("INFINITY_HNSW_PREFETCH_PER_ITER");
+            if (raw == nullptr) {
+                return std::size_t{0};
+            }
+            char *parse_end = nullptr;
+            const unsigned long long parsed = std::strtoull(raw, &parse_end, 10);
+            if (parse_end == raw || *parse_end != '\0' || parsed > 4096) {
+                return std::size_t{0};
+            }
+            return static_cast<std::size_t>(parsed);
+        }();
+        // Two bit-identical traversal knobs found by the SearchLayer decomposition. Both are
+        // OFF by default so an unset environment measures shipping behaviour, and both are
+        // provably graph-neutral, so the determinism gate is an exact check on them:
+        //   PREFETCH_SKIP_VISITED -- do not issue a prefetch for a candidate already visited
+        //     (57.0% of prefetched candidates at n=100000/efC=200 were then skipped).
+        //   BATCH_TAIL_PADDING    -- run the <4 remainder of a neighbour scan through the
+        //     4-wide kernel with padded lanes instead of the 1-wide kernel (13.5% of all
+        //     distance evaluations were on that tail).
+        // Defaults ON in the library now that it is measured, so this knob exists to turn it
+        // OFF for a control arm. Unset therefore means ON, unlike the other knobs here.
+        const bool prefetch_skip_visited = [] {
+            const char *raw = std::getenv("INFINITY_HNSW_PREFETCH_SKIP_VISITED");
+            return raw == nullptr || std::strcmp(raw, "0") != 0;
+        }();
+        const bool batch_tail_padding = [] {
+            const char *raw = std::getenv("INFINITY_HNSW_BATCH_TAIL_PADDING");
+            return raw != nullptr && std::strcmp(raw, "1") == 0;
+        }();
+        const bool nearest_prefetch = [] {
+            const char *raw = std::getenv("INFINITY_HNSW_NEAREST_PREFETCH");
+            return raw != nullptr && std::strcmp(raw, "1") == 0;
+        }();
+        index->SetNearestPrefetch(nearest_prefetch);
+        index->SetPrefetchSkipVisited(prefetch_skip_visited);
+        index->SetBatchTailPadding(batch_tail_padding);
         index->SetPruneHeadroom(prune_headroom);
         index->SetLevel0DoubleBudget(level0_double_budget);
         index->SetPrefetchStep(prefetch_step);
+        index->SetPrefetchPerIter(prefetch_per_iter);
         std::cout << "infinity_prefetch_step=" << index->GetPrefetchStep() << '\n';
+        std::cout << "infinity_prefetch_per_iter=" << index->GetPrefetchPerIter() << '\n';
+        std::cout << "infinity_prefetch_skip_visited=" << (index->GetPrefetchSkipVisited() ? 1 : 0) << '\n';
+        std::cout << "infinity_batch_tail_padding=" << (index->GetBatchTailPadding() ? 1 : 0) << '\n';
+        std::cout << "infinity_nearest_prefetch=" << (index->GetNearestPrefetch() ? 1 : 0) << '\n';
         // Echo what was actually applied, not what was requested: SetPruneHeadroom clamps, so
         // a run's record must come from the index or it can disagree with the graph produced.
         std::cout << "infinity_prune_headroom=" << index->GetPruneHeadroom() << '\n';
@@ -98,6 +146,12 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
         }();
         std::cout << "infinity_build_buckets_per_worker=" << buckets_per_worker << '\n';
 
+#ifdef INFINITY_HNSW_INSTRUMENT
+        // Zero the traversal counters here so the dump below covers the BUILD only. The
+        // query and audit phases that follow also call SearchLayer, and folding them in
+        // would corrupt every per-call statistic.
+        infinity::HnswInstrumentationReset();
+#endif
         const auto insert_begin = HNSW_D0_READ_STEADY_CLOCK(kBuildEntered);
         const infinity::HnswBulkBuildResult build_result =
             config->build_grain == 0
@@ -131,6 +185,67 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
         result->submitted_tasks = build_result.submitted_task_count_;
         result->build_start = build_result.start_;
         result->build_end = build_result.end_;
+
+#ifdef INFINITY_HNSW_INSTRUMENT
+        // Read back while the worker threads still exist -- their counter blocks are
+        // thread_local storage, so this must happen before the pool is destroyed.
+        {
+            const infinity::HnswSearchLayerCounters c = infinity::HnswInstrumentationTotals();
+            const auto rate = [](std::uint64_t num, std::uint64_t den) {
+                return den == 0 ? 0.0 : static_cast<double>(num) / static_cast<double>(den);
+            };
+            std::cout << "infinity_instr_present=1\n";
+            std::cout << "infinity_instr_calls=" << c.calls << '\n';
+            std::cout << "infinity_instr_calls_layer0=" << c.calls_layer0 << '\n';
+            std::cout << "infinity_instr_pops=" << c.pops << '\n';
+            std::cout << "infinity_instr_pops_break=" << c.pops_break << '\n';
+            std::cout << "infinity_instr_pushes=" << c.pushes << '\n';
+            std::cout << "infinity_instr_commit_rejected=" << c.commit_rejected << '\n';
+            std::cout << "infinity_instr_neighbors_seen=" << c.neighbors_seen << '\n';
+            std::cout << "infinity_instr_skip_out_of_range=" << c.skip_out_of_range << '\n';
+            std::cout << "infinity_instr_skip_visited=" << c.skip_visited << '\n';
+            std::cout << "infinity_instr_dist_batch4_calls=" << c.dist_batch4_calls << '\n';
+            std::cout << "infinity_instr_dist_scalar_tail=" << c.dist_scalar_tail << '\n';
+            std::cout << "infinity_instr_dist_scalar_path=" << c.dist_scalar_path << '\n';
+            std::cout << "infinity_instr_prefetch_vec_calls=" << c.prefetch_vec_calls << '\n';
+            std::cout << "infinity_instr_prefetch_wasted=" << c.prefetch_wasted << '\n';
+            std::cout << "infinity_instr_prefetch_suppressed=" << c.prefetch_suppressed << '\n';
+            std::cout << "infinity_instr_dist_batch4_tail_calls=" << c.dist_batch4_tail_calls << '\n';
+            std::cout << "infinity_instr_heap_size_sum_at_push=" << c.heap_size_sum_at_push << '\n';
+            std::cout << "infinity_instr_heap_size_sum_at_pop=" << c.heap_size_sum_at_pop << '\n';
+            std::cout << "infinity_instr_heap_log2_sum_at_push=" << c.heap_log2_sum_at_push << '\n';
+            std::cout << "infinity_instr_heap_log2_sum_at_pop=" << c.heap_log2_sum_at_pop << '\n';
+            std::cout << "infinity_instr_heap_size_max=" << c.heap_size_max << '\n';
+            std::cout << "infinity_instr_visited_alloc_bytes=" << c.visited_alloc_bytes << '\n';
+            // Derived rates, so a reader does not have to divide by hand.
+            std::cout << "infinity_instr_pops_per_call=" << rate(c.pops, c.calls) << '\n';
+            std::cout << "infinity_instr_neighbors_per_pop=" << rate(c.neighbors_seen, c.pops) << '\n';
+            std::cout << "infinity_instr_visited_skip_fraction="
+                      << rate(c.skip_visited, c.neighbors_seen) << '\n';
+            // Padded tail calls execute 4 lanes but commit fewer, so they are counted as the
+            // 4 lanes the kernel actually computed -- the point of the counter is kernel work.
+            std::cout << "infinity_instr_distance_evals="
+                      << ((c.dist_batch4_calls + c.dist_batch4_tail_calls) * 4
+                          + c.dist_scalar_tail + c.dist_scalar_path) << '\n';
+            std::cout << "infinity_instr_scalar_distance_fraction="
+                      << rate(c.dist_scalar_tail + c.dist_scalar_path,
+                              (c.dist_batch4_calls + c.dist_batch4_tail_calls) * 4
+                              + c.dist_scalar_tail + c.dist_scalar_path)
+                      << '\n';
+            std::cout << "infinity_instr_prefetch_waste_fraction="
+                      << rate(c.prefetch_wasted, c.prefetch_vec_calls) << '\n';
+            std::cout << "infinity_instr_pops_per_call_hist=";
+            for (std::size_t i = 0; i < c.pops_per_call.size(); ++i) {
+                std::cout << (i ? "," : "") << i << ':' << c.pops_per_call[i];
+            }
+            std::cout << '\n';
+            std::cout << "infinity_instr_neighbor_size_hist=";
+            for (std::size_t i = 0; i < c.neighbor_size_hist.size(); ++i) {
+                std::cout << (i ? "," : "") << i << ':' << c.neighbor_size_hist[i];
+            }
+            std::cout << '\n';
+        }
+#endif
 
         const HnswD0Search search = [&](const float *query, std::size_t k, std::size_t ef) {
             auto found = index->KnnSearchSorted(query, k, infinity::KnnSearchOption{.ef_ = ef});
@@ -170,6 +285,16 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
             dimension,
             heldout_queries,
             search);
+
+        // Published-ground-truth recall, when requested. Runs AFTER the self-audit and outside
+        // every timed region, so enabling it cannot move a build-time number.
+        {
+            HnswD0ExternalTruthRequest external_request = HnswD0ReadExternalTruthRequest();
+            result->external_recall_audit =
+                HnswD0RunExternalTruthAudit(data, vector_count, dimension, search, external_request);
+            result->external_recall_skip_reason =
+                result->external_recall_audit.valid ? std::string{} : external_request.skip_reason;
+        }
 
         HNSW_D0_TIMING_PROBE(kGraphAuditEntered);
         index->Check();
