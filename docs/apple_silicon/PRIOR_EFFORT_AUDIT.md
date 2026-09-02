@@ -72,6 +72,14 @@ Origin: `native-smoke-v1/docs/apple_silicon/checkpoints/native-hnsw-current-defa
   identical `M=32`/`efConstruction=200` — a 7.2% edge deficit. So Infinity did **less work**,
   produced a **worse index**, and was still **15% slower**. The true like-for-like deficit is
   worse than 0.85x.
+  - **This edge deficit does not generalise beyond n=12,288.** Re-measured on the same metric at
+    n=100,000: 2,586,903 vs 2,595,348, a 0.33% deficit. The two engines build graphs of
+    essentially matched density at realistic n. The 7.2% figure is another instance of this
+    audit's own "always quote N" finding, and it was subsequently mis-generalised into a
+    root-cause claim in README.md — that the forward-budget convention makes Infinity's graph
+    ~7% sparser — which measurement has since refuted. See the convention note in
+    [README.md](README.md) for the current numbers and for why the forward budget is not the
+    binding constraint on degree.
 - **Environment:** on battery, with a development 25% CPU-idle gate substituted for the
   default 95%. `claim_eligible: false`, `scope: d0-development-only` in its own JSON.
 - **Provenance:** the raw evidence dir (`/private/tmp/infinity-d0-current-default-schema5-v2`,

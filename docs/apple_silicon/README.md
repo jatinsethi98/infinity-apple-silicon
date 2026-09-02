@@ -101,7 +101,51 @@ python3 scripts/bench/run_baseline.py --help
 Infinity gives a newly inserted node a forward-edge budget of `M` at **every** layer, following the
 HNSW paper and hnswlib. FAISS gives it `2*M` at level 0. Per-level *capacity* is identical in both
 (`Mmax0 = 2*M`, `Mmax = M`) and the diversity-pruning rule is identical; only the new-node budget
-differs. The consequence is that Infinity builds a ~7% sparser graph and therefore has lower
-recall at the same `efSearch`, so **a build-time comparison at equal `efConstruction` is not
-apples-to-apples.** Compare at iso-recall instead. This is a design difference, not a defect —
-changing it would alter construction semantics for every Infinity index on every platform.
+differs.
+
+**This convention difference has no measurable effect on graph density, and does not explain the
+recall difference.** An earlier version of this section claimed it made Infinity's graph ~7% sparser
+and therefore lower-recall. That was never measured, and it is wrong.
+
+The budget is not the binding constraint. Measured at n=100000, `M=32`, `efConstruction=200`,
+`participants=1` (deterministic), level-0 mean degree is **25.3** — below the `M=32` budget and well
+below the 64-slot capacity. `SelectNeighborsHeuristic`'s diversity rule is what decides degree: it
+rejects the large majority of the 200 `efConstruction` candidates, so the selection loop stops on
+running out of acceptable candidates, not on reaching the cap. Two direct consequences, both
+measured on level-0 directed edge counts:
+
+| change | level-0 edges | delta |
+| --- | --- | --- |
+| baseline | 2,531,954 | — |
+| forward budget raised to `2*M` at level 0 | 2,532,895 | **+941** (+0.04%) |
+| FAISS-style `prune_headroom = 0.2` | 2,531,936 | **−18** (−0.001%) |
+
+Raising the budget to FAISS's convention adds 941 edges out of 2.5M. Both knobs exist behind
+`INFINITY_HNSW_LEVEL0_DOUBLE_BUDGET` and `INFINITY_HNSW_PRUNE_HEADROOM` in the native harness
+bridge if you want to re-derive this.
+
+Against FAISS at matched parameters the two engines build graphs of **essentially the same
+density**, so there is no sparsity deficit to close:
+
+| n | metric | Infinity | FAISS | FAISS denser by |
+| --- | --- | --- | --- | --- |
+| 12,288 | total directed edges | 533,484 | 574,667 | 7.2% |
+| 100,000 | total directed edges | 2,586,903 | 2,595,348 | 0.33% |
+| 100,000 | level-0 directed edges | 2,531,954 | 2,541,185 | 0.36% |
+| 1,000,000 | level-0 directed edges | 29,437,305 | 30,047,512 | 2.1% |
+
+The n=12,288 row is where the "~7% sparser" claim came from (see
+[PRIOR_EFFORT_AUDIT.md](PRIOR_EFFORT_AUDIT.md)). It is a real measurement, and it does not
+generalise: the same metric gives 0.33% at n=100,000. **Quote n with any density claim**, exactly as
+[BASELINE.md](BASELINE.md) already warns for build-time ratios — 12,288 vectors is 1.2% of SIFT1M and
+fixed setup effects dominate there.
+
+Recall at equal `efSearch` still differs by a few points in either direction depending on `n`, and
+that difference is **not yet explained** — density is ruled out, but the cause has not been
+established, so do not attribute it to a specific mechanism without measuring. Comparing at
+iso-recall remains the right practice for build-time claims; treat it as guarding against an
+unexplained difference rather than a known one.
+
+The convention difference itself is still a design difference rather than a defect, and changing it
+would alter construction semantics for every Infinity index on every platform — but on this
+evidence it would also buy essentially nothing.

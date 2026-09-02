@@ -2,10 +2,19 @@
 """iso_recall.py -- Infinity iso-recall build-time comparison against FAISS (Task 3).
 
 The equal-parameter build-time ratio is NOT apples-to-apples when the two engines
-land at different recall: Infinity gives a new node a forward budget of M per layer
-(hnswlib/HNSW-paper convention) while FAISS gives 2*M at level 0, so at equal
-efConstruction Infinity can build a sparser graph => lower recall at the same
-efSearch. A faster build at lower recall is not a win.
+land at different recall at equal efConstruction. A faster build at lower recall is
+not a win, so this driver equalises recall first and reports the ratio there.
+
+Why the recall differs is NOT established. An earlier version of this docstring
+attributed it to Infinity's forward budget of M per layer vs FAISS's 2*M at level 0
+producing a sparser graph. Measurement refutes that: at n=100,000 the two engines
+build 2,586,903 vs 2,595,348 directed edges (0.33% apart), Infinity's level-0 mean
+degree is 25.3 against an M=32 budget and 64-slot capacity -- so the budget is not
+binding, the diversity rule in SelectNeighborsHeuristic is -- and forcing the
+FAISS convention adds 941 edges out of 2.5M. See docs/apple_silicon/README.md.
+
+This does not affect what this driver does or what it reports. It equalises an
+OBSERVED recall difference; it never depended on a mechanism for it.
 
 This driver fixes FAISS at the reference efConstruction (default 200) and sweeps
 Infinity's efConstruction upward until Infinity's recall@10 at BOTH ef=64 and ef=128

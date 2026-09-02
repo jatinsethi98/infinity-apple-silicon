@@ -69,11 +69,19 @@ at 12,288 vectors -- 1.2% of SIFT1M -- which is why it concluded Infinity was
 behind. Always quote N.
 
 ## Task 3 — iso-recall comparison (the honest headline)
-Infinity gives a new node a forward-edge budget of M at every layer; FAISS gives
-2*M at level 0 (see the convention note in README.md). Infinity therefore builds a
-sparser graph, so **comparing build time at equal efConstruction is not
-apples-to-apples.** Fix FAISS at efC=200 and raise Infinity's efC until its
-recall@10 meets FAISS's at the same efSearch:
+At equal efConstruction the two engines land at different recall@10, and a faster
+build at lower recall is not a win — so **comparing build time at equal
+efConstruction is not apples-to-apples.** Fix FAISS at efC=200 and raise Infinity's
+efC until its recall@10 meets FAISS's at the same efSearch:
+
+> **Correction (2026-09-02):** this section previously attributed the recall gap to
+> Infinity's forward-edge budget of M per layer (vs FAISS's 2*M at level 0) making a
+> sparser graph. Measurement refutes that mechanism — the two engines build graphs of
+> essentially matched density, and the forward budget is not the binding constraint on
+> degree. See the convention note in [README.md](README.md). **The iso-recall numbers
+> below are unaffected**: they are direct measurements of build time at matched recall
+> and do not depend on the explanation. What is no longer claimed is *why* the recall
+> differs — that cause is currently unknown.
 
 | point | Infinity build | vs FAISS@200 (64.385 s) | recall@10 ef64 | ef128 | meets FAISS@200 (0.8281 / 0.8672)? |
 |---|---:|---:|---:|---:|:--|
