@@ -1156,6 +1156,28 @@ void PrintResult(HnswD0Engine engine,
         std::cout << engine_name << "_returned_distances_sha256_ef_" << kHnswD0RecallEf[point] << "_k_" << kHnswD0RecallK[point] << '='
                   << result.recall_audit.returned_distances_sha256[point] << '\n';
     }
+    // Published-ground-truth recall, emitted under distinct keys so nothing can confuse it with
+    // the 64-query self-audit above. Absent-but-requested prints a reason rather than nothing,
+    // because a silently missing external recall reads as "the engine scored zero".
+    if (result.external_recall_audit.valid) {
+        const HnswD0ExternalRecallAudit &ext = result.external_recall_audit;
+        std::cout << engine_name << "_external_recall_valid=1\n";
+        std::cout << engine_name << "_external_recall_truth_source=" << ext.truth_source << '\n';
+        std::cout << engine_name << "_external_recall_query_count=" << ext.query_count << '\n';
+        std::cout << engine_name << "_external_recall_groundtruth_columns=" << ext.groundtruth_columns << '\n';
+        std::cout << engine_name << "_external_recall_queries_sha256=" << ext.queries_sha256 << '\n';
+        std::cout << engine_name << "_external_recall_groundtruth_sha256=" << ext.groundtruth_sha256 << '\n';
+        std::cout << engine_name << "_external_recall_cutoff_tie_queries=" << ext.queries_with_cutoff_ties << '\n';
+        for (std::size_t point = 0; point < ext.recall_at_10.size(); ++point) {
+            std::cout << engine_name << "_external_recall_at_10_ef_" << kHnswD0RecallEf[point] << '='
+                      << ext.recall_at_10[point] << '\n';
+            std::cout << engine_name << "_external_strict_id_recall_at_10_ef_" << kHnswD0RecallEf[point] << '='
+                      << ext.strict_id_recall_at_10[point] << '\n';
+        }
+    } else {
+        std::cout << engine_name << "_external_recall_valid=0\n";
+        std::cout << engine_name << "_external_recall_skip_reason=" << result.external_recall_skip_reason << '\n';
+    }
     if (engine == HnswD0Engine::kInfinity) {
         std::cout << "infinity_submitted_tasks=" << result.submitted_tasks << '\n';
         std::cout << "infinity_build_start=" << result.build_start << '\n';

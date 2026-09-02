@@ -4,6 +4,7 @@
 #include "hnsw_d0_query_benchmark.h"
 
 #include <cstdint>
+#include <string>
 
 enum class HnswD0IndexBarrierPhase : int {
     kBeforeIndex = 1,
@@ -54,6 +55,12 @@ struct HnswDevResult {
     HnswD0ExecutionWitness execution_witness;
     HnswD0GraphAudit graph_audit;
     HnswD0RecallAudit recall_audit;
+    // Recall against the PUBLISHED SIFT1M ground truth, when the run asked for it. Optional
+    // and therefore never part of the validity predicate: `valid` stays false and
+    // external_recall_skip_reason says why whenever it did not run. See
+    // hnsw_d0_external_truth.h for why the 64-query self-audit above is not a substitute.
+    HnswD0ExternalRecallAudit external_recall_audit;
+    std::string external_recall_skip_reason;
 };
 
 extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, HnswDevResult *result);

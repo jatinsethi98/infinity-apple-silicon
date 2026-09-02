@@ -1,5 +1,6 @@
 #include "hnsw_dev_bridge.h"
 #include "hnsw_d0_timing_probe.h"
+#include "hnsw_d0_external_truth.h"
 
 #include <faiss/IndexHNSW.h>
 #include <omp.h>
@@ -98,6 +99,18 @@ extern "C" int RunFaissHnsw(const float *data, const HnswDevConfig *config, Hnsw
             dimension,
             heldout_queries,
             search);
+
+        // Published-ground-truth recall, when requested. Runs AFTER the self-audit and outside
+        // every timed region, so enabling it cannot move a build-time number. Identical code in
+        // both bridges on purpose: the two engines must be scored by the same audit or the
+        // comparison means nothing.
+        {
+            HnswD0ExternalTruthRequest external_request = HnswD0ReadExternalTruthRequest();
+            result->external_recall_audit =
+                HnswD0RunExternalTruthAudit(data, vector_count, dimension, search, external_request);
+            result->external_recall_skip_reason =
+                result->external_recall_audit.valid ? std::string{} : external_request.skip_reason;
+        }
 
         HNSW_D0_TIMING_PROBE(kGraphAuditEntered);
         if (index.storage == nullptr || index.storage->ntotal != index.ntotal || index.hnsw.levels.size() != vector_count ||
