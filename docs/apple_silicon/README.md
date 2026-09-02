@@ -140,11 +140,14 @@ generalise: the same metric gives 0.33% at n=100,000. **Quote n with any density
 [BASELINE.md](BASELINE.md) already warns for build-time ratios — 12,288 vectors is 1.2% of SIFT1M and
 fixed setup effects dominate there.
 
-### The recall difference IS now explained: it was the ruler, not the graph
+### The recall difference was mostly the ruler, and what remains of it is tiny
 
 Recall at equal `efSearch` appeared to differ by a few points in either direction depending on
-`n`, and that difference used to be recorded here as unexplained. It is explained now, and the
-explanation is that the instrument was wrong rather than the graph.
+`n`, and that difference used to be recorded here as unexplained. Most of it was the instrument.
+A small real difference survives, and it is worth stating precisely rather than declaring victory:
+at equal parameters Infinity is genuinely a little below FAISS, by 0.0005-0.0014 instead of the
+0.020-0.037 previously recorded. What is explained is the *magnitude*; the residual is not
+explained, only bounded.
 
 Every recorded recall figure came from `AuditHnswD0Recall` — 64 **synthetic** held-out queries,
 uniform in `[0,1)` per coordinate, with truth derived by exhaustive double-precision search. That
@@ -184,8 +187,9 @@ Two consequences, both load-bearing:
   cheap A/B signal that works at any `n` (the published IDs address the full 1M base, so the
   external audit refuses to run below it), and as an out-of-distribution probe. It is not SIFT
   recall and must not be labelled as such.
-- **The iso-recall operating point moves from efConstruction=250 to 225–235**, which is worth
-  several seconds of build time. See [BASELINE.md](BASELINE.md).
+- **The iso-recall operating point moves from efConstruction=250 to 235**, which is worth several
+  seconds of build time. See [BASELINE.md](BASELINE.md) for the crossing and for how sensitive the
+  headline is to the parity criterion chosen.
 
 Beware saturation when comparing: at efSearch ≥ 256 both engines exceed 0.999, where a 0.00001
 difference is one query in 10,000 and says nothing about graph quality. `iso_recall.py` now

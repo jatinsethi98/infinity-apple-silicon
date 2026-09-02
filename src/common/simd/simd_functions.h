@@ -52,15 +52,31 @@ inline void SIMDPrefetch(const void *ptr) { __builtin_prefetch(ptr, 0 /* rw: rea
 // arm64 Apple core", and that was simply wrong. At a 64-byte stride a 512-byte embedding issued
 // EIGHT `prfm` where four cover the same four physical lines, so half of them were redundant hits
 // on a line fill already in flight.
+//
+// If some Apple arm64 core has 64-byte lines, a 128-byte stride there prefetches every other line.
+// That is a throughput regression on such a core, not a correctness problem -- the demand loads are
+// unaffected -- so the constant is chosen at compile time rather than paying a runtime query in a
+// function called billions of times per build.
+//
+// The walk must start at the line the object BEGINS in, not at the object's own address. An object
+// that straddles a line boundary otherwise loses its tail: a 512-byte vector starting 64 bytes into
+// a 128-byte line spans FIVE lines, and stepping 0/128/256/384 from the unaligned base touches only
+// four of them, leaving the last 64 bytes to stall. At d=128 the store happens to hand out
+// 128-aligned vectors (the backing allocation is page-aligned and the stride is 512 bytes), so this
+// was latent rather than active -- but it is wrong for any dimension whose vector size is not a
+// multiple of the line, and it costs one AND to fix.
 inline void SIMDPrefetchRange(const void *ptr, unsigned long bytes) {
 #if defined(__APPLE__) && defined(__aarch64__)
     constexpr unsigned long kCacheLineBytes = 128;
 #else
     constexpr unsigned long kCacheLineBytes = 64;
 #endif
-    const char *cursor = static_cast<const char *>(ptr);
-    for (unsigned long offset = 0; offset < bytes; offset += kCacheLineBytes) {
-        __builtin_prefetch(cursor + offset, 0 /* rw: read */, 3 /* locality: high */);
+    const char *const begin = static_cast<const char *>(ptr);
+    const char *const end = begin + bytes;
+    const char *cursor =
+        begin - (reinterpret_cast<unsigned long>(begin) & (kCacheLineBytes - 1));
+    for (; cursor < end; cursor += kCacheLineBytes) {
+        __builtin_prefetch(cursor, 0 /* rw: read */, 3 /* locality: high */);
     }
 }
 

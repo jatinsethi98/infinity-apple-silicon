@@ -207,7 +207,7 @@ Sweeping Infinity's efConstruction against FAISS@200 on published truth (3 build
 efSearch 512 is excluded from the decision because both engines exceed 0.9999 there, where
 0.00001 is one query in 10,000):
 
-| Infinity efC | ef32 | ef64 | ef128 | ef256 | ≥ FAISS at all deciding points |
+| Infinity efC | ef32 | ef64 | ef128 | ef256 | median ≥ FAISS at all deciding points |
 | ---: | ---: | ---: | ---: | ---: | :--: |
 | 200 | −0.00141 | −0.00083 | −0.00045 | −0.00005 | no |
 | 210 | −0.00009 | −0.00037 | −0.00028 | −0.00003 | no |
@@ -216,8 +216,24 @@ efSearch 512 is excluded from the decision because both engines exceed 0.9999 th
 | **235** | **+0.00129** | **+0.00059** | **+0.00000** | **+0.00004** | **YES** |
 | 240 | +0.00196 | +0.00039 | +0.00008 | +0.00008 | YES |
 
-**The iso-recall point is efConstruction≈235, not 250.** efC=225 is statistically
-indistinguishable from parity and is quoted below as the lower bracket.
+**The iso-recall point is efConstruction=235, not 250** — under the same rule the previous
+headline used, namely median recall ≥ FAISS at every deciding efSearch.
+
+That rule is not the only defensible one, and the answer depends on which is chosen, so both are
+reported. Re-measured with 5–6 independent builds per point (the differences below are between
+independent build draws, so a Welch t on the per-build means is the right test; the same 10,000
+queries score both engines, so query-sampling error is common and cancels):
+
+| vs FAISS efC=200 | ef32 | ef64 | ef128 | ef256 |
+| --- | ---: | ---: | ---: | ---: |
+| Infinity efC=235 | +0.00119 (t=+8.2) | +0.00035 (t=+3.7) | +0.00006 (**t=+1.5, tie**) | +0.00006 (t=+3.9) |
+| Infinity efC=240 | +0.00162 (t=+8.2) | +0.00036 (t=+6.4) | +0.00014 (t=+3.7) | +0.00009 (t=+6.1) |
+
+So **efC=235 is never significantly lower** than FAISS, but its ef128 margin is a statistical tie
+rather than a win; **efC=240 is significantly higher at every non-saturated point.** A single-build
+comparison at efC=235 can therefore land on either side at ef128 — one did, during a verification
+run — which is exactly why the medians above are over 3+ builds. The remaining differences at the
+crossing are on the order of 10 neighbour slots in 100,000.
 
 ### 2. Two bit-identical build-time fixes
 
@@ -248,21 +264,46 @@ The last row reproduces the previous headline (1.312x here against 1.344x record
 different day and a busier machine), which is what licenses reading the others as a change rather
 than as a new measurement.
 
-**Iso-recall result: Infinity builds SIFT1M 1.523x faster than FAISS at matched published-truth
-recall, 95% CI [1.514x, 1.532x].** The >=1.5x goal is met at the strict criterion (Infinity ≥ FAISS
-at every non-saturated efSearch); at the indistinguishable-from-parity bracket, efC=225, it is
-1.585x.
+A second, independent 5-block campaign the same morning adds the efC=240 point and reproduces
+efC=235:
+
+| arm | median build | ratio vs FAISS@200 | speedup | 95% CI on speedup |
+| --- | ---: | ---: | ---: | --- |
+| FAISS efC=200 | 59.705 s | 1.0000 | — | — |
+| Infinity efC=235 | 39.236 s | 0.6617 | 1.512x | [1.482x, 1.541x] |
+| Infinity efC=240 | 40.169 s | 0.6732 | 1.486x | [1.470x, 1.501x] |
+
+**Iso-recall result, stated against both parity criteria:**
+
+- **Median recall ≥ FAISS at every deciding efSearch** (the rule the previous 1.344x used, so this
+  is the like-for-like number): efC=235 → **1.523x**, 95% CI [1.514x, 1.532x], reproduced at
+  1.512x [1.482x, 1.541x] in a second campaign. **The >=1.5x goal is met.**
+- **Recall significantly higher at every deciding efSearch** (a stricter rule than any previous
+  number here was held to): efC=240 → **1.486x**, 95% CI [1.470x, 1.501x]. Essentially at 1.5x but
+  not above it.
+
+Quote whichever criterion you state. The honest one-line summary is that Infinity builds SIFT1M
+about **1.49x–1.52x** faster than FAISS at matched published-truth recall, up from 1.344x, and which
+end of that you land on is a question about the parity rule rather than about either engine.
 
 Where the 13.85% came from, each ratio paired within that one campaign:
 
 | contribution | ratio | improvement | 95% CI |
 | --- | ---: | ---: | --- |
 | operating point efC 250 → 235 (the recall-instrument fix) | 0.9328 | 6.72% | [5.74%, 7.70%] |
-| the two code fixes, at fixed efC=235 | 0.9235 | 7.65% | [7.39%, 7.90%] |
+| the two code fixes plus incidental codegen, at fixed efC=235 | 0.9235 | 7.65% | [7.39%, 7.90%] |
 | **total, efC=250 original → efC=235 with both fixes** | **0.8615** | **13.85%** | **[13.16%, 14.54%]** |
 
 The two halves are almost exactly equal, which is the summary of the whole exercise: half the win
 was in the code and half was in the ruler.
+
+**One caveat on the middle row.** Its "original code" arm is the current source with the knob turned
+off, not a build of `c13dedb73`, so it also carries whatever incidental difference the two builds
+have — not-taken branches for the retained knobs, object layout, code layout. The two attributions
+that are clean are the individual A/Bs above: 0.9626 for skip-visited and 0.9723 for the stride,
+which compose to 0.9359 (**6.4%**). Read 6.4% as the attributable code win and 7.65% as the
+end-to-end delta between two real builds; the gap between them is the incidental part. Closing it
+would need a commit-pinned three-arm campaign against `c13dedb73` itself.
 
 ### Reproduce
 
@@ -276,14 +317,24 @@ python3 scripts/bench/iso_recall.py \
   --infinity-bin build/bench/infinity_hnsw_d0 --faiss-bin build/bench-faiss-src/faiss_hnsw_d0
 
 # The headline build-time campaign (audit OFF: unset the two variables above, so a 10k-query
-# audit cannot warm the machine before the next arm's build)
+# audit cannot warm the machine before the next arm's build). All five arms in one campaign, which
+# is what makes every ratio in the contribution table paired within one thermal state.
+unset HNSW_D0_EXTERNAL_QUERIES HNSW_D0_EXTERNAL_GROUNDTRUTH
 python3 scripts/bench/knob_scan.py \
   --dataset $PWD/../datasets/sift1m/base.f32 --n 1000000 --d 128 --m 32 \
   --participants 12 --blocks 6 --require-ac --label headline-isorecall \
   --arm "faiss200:bin=build/bench-faiss-src/faiss_hnsw_d0,efc=200" \
   --arm "inf235_new:bin=build/bench/infinity_hnsw_d0,efc=235" \
+  --arm "inf225_new:bin=build/bench/infinity_hnsw_d0,efc=225" \
+  --arm "inf235_orig:bin=build/bench/infinity_hnsw_d0,efc=235,INFINITY_HNSW_PREFETCH_SKIP_VISITED=0" \
+  --arm "inf250_orig:bin=build/bench/infinity_hnsw_d0,efc=250,INFINITY_HNSW_PREFETCH_SKIP_VISITED=0" \
   --reference faiss200
 ```
+
+Note that reproducing the *stride* row of the contribution table needs two binaries, since the
+stride is a compile-time constant: build once with `kCacheLineBytes = 64` in
+`src/common/simd/simd_functions.h`, save that executable, restore, rebuild, then
+`ab_build.py --control-bin <the 64 build> --candidate-bin <the 128 build>`.
 
 ### Limitations specific to these numbers
 

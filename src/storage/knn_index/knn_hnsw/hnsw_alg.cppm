@@ -357,9 +357,11 @@ public:
     // removes that traffic. The test is read-only and the hint has no semantics, so the graph
     // is unchanged -- the hash gate proves it rather than merely suggesting it.
     //
-    // Conservative in one direction only: a candidate unvisited when its prefetch is issued
-    // can be visited by the time the scan reaches it, so some waste remains. It never
-    // suppresses a prefetch that is needed.
+    // The filter is EXACT for a single neighbour list, not merely conservative: entries within a
+    // list are distinct and `visited` is only set by the scan itself, so a candidate that is
+    // unvisited when its hint is issued cannot become visited before the scan reaches it. And
+    // because `visited` is monotonic within a call, a suppressed candidate is never subsequently
+    // read. So it suppresses exactly the wasted hints and no others.
     void SetPrefetchSkipVisited(bool enabled) { prefetch_skip_visited_ = enabled; }
     bool GetPrefetchSkipVisited() const { return prefetch_skip_visited_; }
 
@@ -558,8 +560,13 @@ protected:
             auto prefetch_drain = [&](size_t count) {
                 for (; prefetch_start < neighbor_size && count > 0; --count) {
                     const VertexType prefetch_idx = neighbors_p[prefetch_start++];
+                    // Compare as unsigned so a negative id is caught by the same test rather than
+                    // indexing `visited` out of bounds. A valid adjacency list cannot hold one, but
+                    // this is a new read of `visited` at an index the scan has not validated yet, so
+                    // it does not get to assume the invariant.
                     if (prefetch_skip_visited &&
-                        (prefetch_idx >= (VertexType)cur_vec_num || visited[prefetch_idx])) {
+                        (static_cast<size_t>(static_cast<std::make_unsigned_t<VertexType>>(prefetch_idx)) >= cur_vec_num ||
+                         visited[prefetch_idx])) {
                         INFINITY_HNSW_INSTR(++instr.prefetch_suppressed);
                         continue;
                     }

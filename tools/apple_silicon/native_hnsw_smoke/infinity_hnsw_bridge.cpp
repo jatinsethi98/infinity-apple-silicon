@@ -232,8 +232,13 @@ extern "C" int RunInfinityHnsw(const float *data, const HnswDevConfig *config, H
                               (c.dist_batch4_calls + c.dist_batch4_tail_calls) * 4
                               + c.dist_scalar_tail + c.dist_scalar_path)
                       << '\n';
+            // Against every candidate slot CONSIDERED, not just the hints issued. With
+            // skip-visited on, the wasted slots are suppressed rather than issued, so dividing by
+            // the issued count would compare a numerator and denominator that no longer overlap
+            // and could exceed 1.
             std::cout << "infinity_instr_prefetch_waste_fraction="
-                      << rate(c.prefetch_wasted, c.prefetch_vec_calls) << '\n';
+                      << rate(c.prefetch_wasted, c.prefetch_vec_calls + c.prefetch_suppressed)
+                      << '\n';
             std::cout << "infinity_instr_pops_per_call_hist=";
             for (std::size_t i = 0; i < c.pops_per_call.size(); ++i) {
                 std::cout << (i ? "," : "") << i << ':' << c.pops_per_call[i];
