@@ -38,7 +38,7 @@ public:
         infinity::GlobalResourceUsage::Init();
 #endif
 
-        fs::path RESOURCE_DIR = "/usr/share/infinity/resource";
+        fs::path RESOURCE_DIR = GetResourceDir();
         if (!fs::exists(RESOURCE_DIR)) {
             std::cerr << "Resource directory doesn't exist: " << RESOURCE_DIR << std::endl;
             return;
@@ -74,7 +74,9 @@ public:
         return tokens;
     }
 
-    RAGAnalyzer *analyzer_;
+    // Must be initialised: SetUp() returns early when the resource directory is
+    // absent, and TearDown() unconditionally deletes this.
+    RAGAnalyzer *analyzer_ = nullptr;
     std::string rag_tokenizer_path_ = "python/infinity_sdk/infinity";
     std::string input_file_ = rag_tokenizer_path_ + "/tokenizer_input.txt";
 };

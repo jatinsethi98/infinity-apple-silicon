@@ -39,9 +39,16 @@ public:
         const char *RESOURCE_DIR = GetResourceDir();
         if (!fs::exists(RESOURCE_DIR)) {
             std::cerr << "WARN: Resource directory doesn't exist: " << RESOURCE_DIR << std::endl;
-        } else if (bool ok = ValidateDirPermission(RESOURCE_DIR); !ok) {
-            std::cerr << "FATAL: Please ensure directory " << RESOURCE_DIR << " exists and current user has RWX permission of it." << std::endl;
+        } else if (bool ok = ValidateDirPermission(RESOURCE_DIR, /*require_write=*/false); !ok) {
+            std::cerr << "FATAL: Cannot read resource directory " << RESOURCE_DIR << std::endl;
             abort();
+        } else if (!fs::exists(fs::path(RESOURCE_DIR) / "jieba" / "dict" / "jieba.dict.utf8")) {
+            // An uninitialised submodule is an empty directory that exists, so an
+            // existence check alone passes and the analyzer tests then fail one by one
+            // with nothing pointing at the cause. Name the cause once, here.
+            std::cerr << "WARN: Resource directory " << RESOURCE_DIR
+                      << " exists but has no dictionaries; dictionary-backed analyzer tests will fail.\n"
+                      << "      Run: git submodule update --init --recursive resource" << std::endl;
         }
 
         CleanupTmpDir();
@@ -116,7 +123,7 @@ protected:
 
     const char *GetTmpDir() { return "tmp"; }
 
-    const char *GetResourceDir() { return "/usr/share/infinity/resource"; }
+    const char *GetResourceDir() { return ResolvedResourceDir().c_str(); }
 
     const char *GetSnapshotDir() {
         static const std::string path = (fs::path(ResolvedHomeDir()) / "snapshot").string();
@@ -165,10 +172,47 @@ private:
         return home_dir;
     }
 
+    // The analyzer dictionaries ship in the repository's resource/ tree, but the
+    // tests were written against the installed location. Linux CI only satisfies
+    // them because the workflows bind-mount ${PWD}/resource onto
+    // /usr/share/infinity/resource (.github/workflows/tests.yml), so a plain source
+    // checkout — on any platform, not just macOS — has no resource directory and
+    // every dictionary-backed analyzer test fails.
+    //
+    // The installed path is probed BEFORE the in-tree one so that a machine which
+    // does have an install (notably Linux CI, via that mount) resolves exactly as
+    // it did before. The final fallback keeps the original path in the failure
+    // message when nothing is found.
+    static const std::string &ResolvedResourceDir() {
+        static const std::string resource_dir = [] {
+            const char *installed = "/usr/share/infinity/resource";
+            if (const char *override_dir = std::getenv("INFINITY_RESOURCE_DIR");
+                override_dir != nullptr && override_dir[0] != '\0') {
+                return std::string(override_dir);
+            }
+            std::error_code ec;
+            if (fs::exists(installed, ec) && !ec) {
+                return std::string(installed);
+            }
+            const fs::path in_tree = fs::current_path(ec) / "resource";
+            if (!ec && fs::exists(in_tree, ec) && !ec) {
+                return in_tree.string();
+            }
+            return std::string(installed);
+        }();
+        return resource_dir;
+    }
+
     // Validate if given path satisfy all of following:
     // - The path is a directory or symlink to a directory.
-    // - Current user has read, write, and execute permission of the path.
-    bool ValidateDirPermission(const char *path_str) {
+    // - Current user has read and execute permission of the path.
+    // - With require_write, current user also has write permission.
+    //
+    // Pass require_write=false for directories the tests only read. The resource
+    // directory is one: it may legitimately be a read-only install, or the in-tree
+    // resource/ submodule, and demanding write access there would abort the suite over
+    // a directory nothing writes to.
+    bool ValidateDirPermission(const char *path_str, bool require_write = true) {
         fs::path path(path_str);
         std::error_code ec;
 
@@ -182,6 +226,9 @@ private:
         fs::directory_iterator it(path, fs::directory_options::skip_permission_denied, ec);
         if (ec)
             return false;
+
+        if (!require_write)
+            return true;
 
         // Check write permission
         fs::path temp_file = path / "temp_file.txt";

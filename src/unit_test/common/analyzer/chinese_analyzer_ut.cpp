@@ -31,7 +31,7 @@ namespace fs = std::filesystem;
 class ChineseAnalyzerTest : public BaseTest {};
 
 TEST_F(ChineseAnalyzerTest, test1) {
-    fs::path RESOURCE_DIR = "/usr/share/infinity/resource";
+    fs::path RESOURCE_DIR = GetResourceDir();
     if (!fs::exists(RESOURCE_DIR)) {
         FAIL() << "Resource directory doesn't exist: " << RESOURCE_DIR;
     }

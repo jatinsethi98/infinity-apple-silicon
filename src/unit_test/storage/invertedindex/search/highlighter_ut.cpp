@@ -36,7 +36,7 @@ public:
         infinity::GlobalResourceUsage::Init();
 #endif
 
-        fs::path RESOURCE_DIR = "/usr/share/infinity/resource";
+        fs::path RESOURCE_DIR = GetResourceDir();
         if (!fs::exists(RESOURCE_DIR)) {
             FAIL() << "Resource directory doesn't exist: " << RESOURCE_DIR;
         }
