@@ -9,34 +9,49 @@
 | HNSW index build faster than FAISS at matched recall | Done, measured | [BENCHMARKS.md](BENCHMARKS.md): 1.40× on M4, 1.52× on M3 Pro |
 | Query throughput vs FAISS | Done, measured | 1.30× on M4 |
 | Reproducible benchmark harness, dataset fetch, paired A/B and iso-recall drivers | Done | `scripts/bench/`, `scripts/apple_silicon/` |
-| Full-text search on macOS | Not verified | – |
-| Update, delete, drop on macOS | Not verified | – |
-| Bulk import on macOS | Not verified | – |
-| Crash recovery and WAL replay on macOS | Not verified | – |
+| Full-text search on macOS | Verified, incl. CJK dictionary analyzers | [MACOS_VERIFICATION.md](MACOS_VERIFICATION.md); `dql/fulltext` 8/8 + `fulltext_chinese_analyzer.slt` |
+| Update, delete, drop on macOS | Verified | `dml/delete`, `dml/update`, `ddl/drop`, `dml/compact`, `dml/cleanup` |
+| Bulk import on macOS | Verified | `dml/import` 27/27, `dml/export` 5/5 |
+| Crash recovery and WAL replay on macOS | Verified against process death only | `scripts/apple_silicon/verify_crash_recovery.sh` |
+| Power-loss durability | **Broken upstream, all platforms** | the WAL never fsyncs; see MACOS_VERIFICATION.md |
 | Linux x86-64 and Linux ARM64 unchanged after the port | Not re-verified | upstream CI not yet run on this branch |
-| Packaging: tarball, Homebrew formula, arm64 Python wheel | Not started | – |
-| macOS CI runner with build cache and smoke tests | Not started | – |
+| Packaging: relocatable arm64 tarball | Done, self-tested | `scripts/apple_silicon/make_package.sh` |
+| Packaging: Homebrew formula, arm64 embedded Python wheel | Not started | the shipped wheel is the pure-Python remote SDK |
+| macOS CI runner with build cache and smoke tests | Written, never executed | `.github/workflows/macos_arm64.yml` |
+| HTTP API and cluster mode on macOS | Not tested | two concurrent standalone instances do work |
 | Hand-written NEON kernels (today the x86 intrinsics are lowered by SIMDe) | Not started | the largest untouched lever, see [SEARCHLAYER_DECOMPOSITION.md](SEARCHLAYER_DECOMPOSITION.md) |
 
-Honest summary: a fast engine core and a working port, not yet a shippable database.
+Honest summary: the engine's functionality is verified natively and there is a packaged
+artifact, so this is a database you can run on a Mac. It is not yet one to trust with
+data you cannot lose: power-loss durability is broken upstream on every platform (the
+WAL never fsyncs), and neither the HTTP API nor cluster mode is tested here.
 
-## Next: make it a database people can run
+## Next: make it a database people can rely on
 
 In the order they unblock each other.
 
-1. **Functional parity on macOS.** Run the upstream unit, SQL, Python, HTTP, restart and recovery
-   test suites natively. Fix what fails. Document any exclusion that is genuinely Linux-only.
-   Covers full-text search, update/delete/drop, bulk import and crash recovery.
-2. **Keep Linux green.** Run the existing Linux x86-64 and ARM64 CI on this branch and keep every
-   platform-specific change gated, so the port stays upstreamable.
-3. **Packaging.** A native tarball, a Homebrew formula, and an arm64 macOS wheel for the embedded
-   Python module, so a fresh Mac can install and run without a development checkout.
-4. **macOS CI.** An arm64 runner that builds the server and the harness, runs the smoke tests, and
-   checks for performance regressions against the numbers in BENCHMARKS.md.
-5. **Upstream pull requests.** The toolchain and triplet, the platform gating, the SIMD dispatch
-   changes and the HNSW build fixes, as separate reviewable PRs against infiniflow/infinity.
-6. **RAGFlow on Apple Silicon.** With Infinity native, an ARM64 RAGFlow setup that uses Infinity
-   as its document engine instead of Elasticsearch, which RAGFlow currently lists as unsupported.
+1. **Run the macOS CI workflow.** It exists and has never executed. Until it is green
+   once, none of the above is protected against regression.
+2. **Keep Linux green.** Run the existing Linux x86-64 and ARM64 CI on this branch. Four
+   changes now touch shared code — the float parse, two test-harness fixes and the
+   unit-test resource resolver — and none has been run on Linux.
+3. **HTTP API parity.** Every server starts an HTTP listener that nothing here
+   exercises; the SQL logic tests drive only the PostgreSQL path.
+   `python/test_pysdk --http` is the existing harness.
+4. **Durability.** Decide whether to fix the WAL commit path (`fsync`, and
+   `F_FULLFSYNC` on Darwin) and the un-truncated export writes. Both are upstream
+   defects recorded in [MACOS_VERIFICATION.md](MACOS_VERIFICATION.md), and both are
+   storage-engine decisions rather than port work.
+5. **The two engine-side test failures.** The PGM `long double` overflow needs the
+   vendored arithmetic reformulated so it cannot overflow where `long double` is 64-bit;
+   the low-cardinality index test needs its key type corrected.
+6. **Upstream pull requests.** The toolchain and triplet, the platform gating, the SIMD
+   dispatch changes, the HNSW build fixes, and — separately, because they are not
+   macOS-specific — the harness portability fixes. As reviewable PRs against
+   infiniflow/infinity.
+7. **RAGFlow on Apple Silicon.** With Infinity native, an ARM64 RAGFlow setup that uses
+   Infinity as its document engine instead of Elasticsearch, which RAGFlow currently
+   lists as unsupported.
 
 ## Then: performance
 

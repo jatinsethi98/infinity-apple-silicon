@@ -9,11 +9,23 @@ guide: how to build, what differs from the Linux build, and why. Results are in
 | Area | State |
 |---|---|
 | Native arm64 compile + link | Working (engine, unit tests, HNSW benchmark harness) |
-| Native server lifecycle | Create / insert / flush / HNSW build / indexed query / restart + reload verified (M3 Pro, 2026-08) |
+| Unit tests | 1126 / 1131 pass; 5 known failures, each root-caused |
+| SQL logic tests | 205 / 205 pass |
+| Full-text search (incl. CJK dictionary analyzers) | Verified |
+| Update / delete / drop | Verified |
+| Bulk import and export | Verified |
+| Crash recovery | Verified against process death (`kill -9`), **not** against power loss |
 | HNSW index build and query vs FAISS | Measured: 1.40× build at matched recall and 1.30× QPS on M4; 1.52× build on M3 Pro. See [BENCHMARKS.md](BENCHMARKS.md) |
-| Full-text, update/delete/drop, bulk import, crash recovery | Not yet verified natively |
+| Packaging | Relocatable arm64 tarball, self-tested from a relocated path |
+| macOS CI | Workflow written, **not yet executed by a runner** |
+| HTTP API, cluster mode | Not tested |
 | Linux x86-64 / ARM64 preservation | Not yet re-verified after the port |
-| Packaging / macOS CI | Not started |
+
+Each of those rows has the command that produced it, and the five remaining unit-test
+failures are itemised with root causes, in
+[MACOS_VERIFICATION.md](MACOS_VERIFICATION.md). Two real durability/correctness gaps
+were found in upstream code and deliberately left unfixed rather than changed inside a
+port; they are documented there too.
 
 ## Prerequisites
 
