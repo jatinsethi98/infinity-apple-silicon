@@ -166,3 +166,12 @@ scripts/bench/__pycache__/
 
 # local benchmark datasets (scripts/bench/fetch_datasets.py)
 datasets/
+
+# Byproducts of the RAG analyzer unit tests, which write the Python reference
+# tokenizer output next to the SDK sources (src/unit_test/common/analyzer/rag_analyzer_ut.cpp).
+python/infinity_sdk/infinity/tokenizer_python_output.txt
+python/infinity_sdk/infinity/fine_grained_tokenizer_python_output.txt
+
+# Staged by python/infinity_sdk/prepare_huqie.py when building the SDK wheel.
+python/infinity_sdk/infinity/huqie.txt
+python/infinity_sdk/infinity/huqie.txt.trie
