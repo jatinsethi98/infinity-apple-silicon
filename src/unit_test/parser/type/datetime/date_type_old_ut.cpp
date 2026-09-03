@@ -59,13 +59,14 @@ TEST_F(DateTypeOldTest, TestEqStdChronoForward) {
     DateTOld date;
     date.FromString("2020-01-31");
 
-    tm tmdate = {};
-    tmdate.tm_year = 2020 - 1900;
-    tmdate.tm_mon = 1 - 1;
-    tmdate.tm_mday = 31;
-    time_t time_c = mktime(&tmdate);
-    system_clock::time_point tp = system_clock::from_time_t(time_c);
-    sys_days sysdays = ceil<days>(tp);
+    // Build the reference day directly from the calendar date rather than round
+    // tripping through mktime/from_time_t/ceil<days>. mktime interprets the tm as
+    // LOCAL time, and ceil<days> then rounds up to the next day boundary, so in any
+    // zone west of UTC the reference started a day ahead of the date under test and
+    // the whole comparison was off by one. Linux CI runs in UTC containers, where
+    // local midnight is already a day boundary and ceil is a no-op, which is why
+    // this only ever failed outside UTC.
+    sys_days sysdays{year{2020} / January / 31};
 
     for (i32 i = 0; i < 30000; i++) {
         year_month_day ymd = year_month_day(sysdays);

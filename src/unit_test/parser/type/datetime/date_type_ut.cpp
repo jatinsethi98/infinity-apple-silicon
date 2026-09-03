@@ -84,7 +84,12 @@ TEST_F(DateTypeTest, TestNegativeYears) {
     interval.unit = kYear;
     interval.value = 3;
 
-    EXPECT_EQ(date.ToString(), "-001-05-04");
+    // DateT is DateTypeStd, which renders through std::chrono's year_month_day
+    // stream operator. The standard specifies %Y for a chrono year as the sign
+    // followed by the magnitude padded to at least four digits, so year -1 is
+    // "-0001". The older fmt-based DateType used "{:04d}", where the sign counts
+    // toward the field width and the same year printed as "-001".
+    EXPECT_EQ(date.ToString(), "-0001-05-04");
     EXPECT_EQ(DateT::GetDatePart(date, kYear), -1);
     EXPECT_EQ(DateT::GetDatePart(date, kMonth), 5);
     EXPECT_EQ(DateT::GetDatePart(date, kDay), 4);
@@ -93,5 +98,5 @@ TEST_F(DateTypeTest, TestNegativeYears) {
     EXPECT_EQ(date_shift.ToString(), "0002-05-04");
 
     EXPECT_TRUE(DateT::Subtract(date_shift, interval, date_shift));
-    EXPECT_EQ(date_shift.ToString(), "-001-05-04");
+    EXPECT_EQ(date_shift.ToString(), "-0001-05-04");
 }
