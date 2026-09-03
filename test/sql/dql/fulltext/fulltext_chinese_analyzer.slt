@@ -1,0 +1,77 @@
+# name: test/sql/dql/fulltext/fulltext_chinese_analyzer.slt
+# description: Full-text search through a dictionary-backed analyzer, with explicit BM25 parameters
+# group: [dql]
+#
+# The rest of the full-text suite exercises the analyzers that need no data files
+# (standard, keyword, whitespace, ngram), and fulltext.slt only asserts that an unknown
+# analyzer name is REJECTED. Nothing covered the case where an analyzer actually loads
+# its dictionaries from resource_dir and tokenizes with them, so a broken resource path
+# or broken CJK segmentation would not have failed any test.
+#
+# It also pins the BM25 option path. 'bm25_param_k1' and 'bm25_param_b' are parsed with
+# DataType::StringToValue<FloatT>, which had a macOS-only defect that rejected every
+# numeric literal longer than one character. Any full-text query passing a float-valued
+# option threw on Darwin while every existing full-text test passed, because none of
+# them passes one.
+#
+# Requires resource_dir to point at a populated resource/ tree. CI bind-mounts the
+# repository's resource/ submodule to /usr/share/infinity/resource.
+
+statement ok
+DROP TABLE IF EXISTS fulltext_chinese;
+
+statement ok
+CREATE TABLE fulltext_chinese(body varchar DEFAULT '');
+
+statement ok
+INSERT INTO fulltext_chinese VALUES ('我来到北京清华大学'), ('小明硕士毕业于中国科学院计算所');
+
+# 'chinese' is the registered name of the jieba-backed analyzer. Creating this index
+# fails if resource_dir does not resolve, so reaching the queries below is itself the
+# assertion that the dictionaries loaded.
+statement ok
+CREATE INDEX ft_chinese ON fulltext_chinese(body) USING FULLTEXT WITH (analyzer=chinese);
+
+# Segmentation: '清华大学' is a single dictionary term inside a longer run of characters
+# with no whitespace to split on, so matching it at all requires the analyzer to have
+# tokenized both the document and the query. The returned row is the assertion.
+query T
+SELECT body FROM fulltext_chinese SEARCH MATCH TEXT ('body', '清华大学', 'topn=5');
+----
+我来到北京清华大学
+
+query T
+SELECT body FROM fulltext_chinese SEARCH MATCH TEXT ('body', '中国科学院', 'topn=5');
+----
+小明硕士毕业于中国科学院计算所
+
+# The same query with explicit, non-default BM25 parameters. Two deliberate choices:
+#
+#   - The option names must be exactly bm25_param_k1 / bm25_param_b, as read at
+#     src/planner/bound_select_statement_impl.cpp:237-249. Unrecognised search options
+#     are silently IGNORED rather than rejected, so a test written against a
+#     plausible-but-wrong name (bm25_params=1.2,0.75) passes while exercising nothing.
+#   - The values are multi-character on purpose. That is what the macOS defect rejected;
+#     single-character values such as '1' would have parsed even when it was broken.
+#
+# No score is asserted. The scores here land ~1e-5 from a 4-decimal rounding boundary,
+# so pinning one would be a coin flip across platforms and floating-point orderings.
+# 'statement ok' is the assertion that matters: before the fix this query did not return
+# a wrong score, it raised "Error: parse float error" and failed outright.
+statement ok
+SELECT body, SCORE() FROM fulltext_chinese SEARCH MATCH TEXT ('body', '中国科学院', 'topn=5;bm25_param_k1=2.5;bm25_param_b=0.3');
+
+# The remaining float-valued options on the same parsing path.
+statement ok
+SELECT body, SCORE() FROM fulltext_chinese SEARCH MATCH TEXT ('body', '中国科学院', 'topn=5;bm25_param_delta=0.5');
+
+statement ok
+SELECT body, SCORE() FROM fulltext_chinese SEARCH MATCH TEXT ('body', '中国科学院', 'topn=5;threshold=0.001');
+
+# A malformed float must still be rejected, so the consumed-length check is not
+# quietly accepting trailing garbage.
+statement error
+SELECT body FROM fulltext_chinese SEARCH MATCH TEXT ('body', '中国科学院', 'topn=5;bm25_param_k1=2.5junk');
+
+statement ok
+DROP TABLE fulltext_chinese;
