@@ -588,12 +588,8 @@ void PhysicalShow::ExecuteShowGlobalVariable(QueryContext *query_context, ShowOp
             };
 
             output_block_ptr->Init(output_column_types);
-#ifdef ENABLE_JEMALLOC_PROF
-            // option value
+            // Always off: jemalloc was removed with Linux support.
             Value value = Value::MakeVarchar("off");
-#else
-            Value value = Value::MakeVarchar("on");
-#endif
             ValueExpression value_expr(value);
             value_expr.AppendToChunk(output_block_ptr->column_vectors_[0]);
             break;

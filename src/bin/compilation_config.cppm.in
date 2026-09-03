@@ -27,7 +27,6 @@ export module compilation_config;
 #define GIT_COMMIT_ID "@GIT_COMMIT_ID@"
 #define BUILD_TYPE "@CMAKE_BUILD_TYPE@"
 
-#define ENABLE_JEMALLOC "@ENABLE_JEMALLOC@"
 
 namespace infinity {
 

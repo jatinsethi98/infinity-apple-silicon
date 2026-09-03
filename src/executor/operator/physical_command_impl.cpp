@@ -14,10 +14,6 @@
 
 module;
 
-#ifdef ENABLE_JEMALLOC_PROF
-#include <jemalloc/jemalloc.h>
-#endif
-
 module infinity_core:physical_command.impl;
 
 import :physical_command;
@@ -111,19 +107,10 @@ bool PhysicalCommand::Execute(QueryContext *query_context, OperatorState *operat
                             RecoverableError(status);
                         }
                         case GlobalVariable::kJeProf: {
-#if defined(ENABLE_JEMALLOC_PROF) && !defined(__APPLE__)
-                            // http://jemalloc.net/jemalloc.3.html
-                            malloc_stats_print(nullptr, nullptr, "admp");
-                            int ret = mallctl("prof.dump", nullptr, nullptr, nullptr, 0);
-                            if (ret != 0) {
-                                Status status = Status::UnexpectedError(fmt::format("mallctl prof1.dump failed {}", ret));
-                                RecoverableError(status);
-                            }
-                            return true;
-#else
-                            Status status = Status::InvalidCommand("jemalloc is not enabled");
+                            // jemalloc was removed with Linux support; this fork uses the
+                            // platform allocator, so there is no heap profile to dump.
+                            Status status = Status::InvalidCommand("jemalloc is not available in this build");
                             RecoverableError(status);
-#endif
                         }
                         case GlobalVariable::kFollowerNum: {
                             i64 value_int = set_command->value_int();

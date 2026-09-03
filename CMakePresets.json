@@ -17,7 +17,6 @@
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "ENABLE_JEMALLOC": "OFF",
         "VCPKG_TARGET_TRIPLET": "arm64-osx",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets",
         "VCPKG_OVERLAY_PORTS": "${sourceDir}/ports"

@@ -15,10 +15,6 @@
 #include <csignal>
 #include <cstring>
 
-#ifdef ENABLE_JEMALLOC_PROF
-#include <jemalloc/jemalloc.h>
-#endif
-
 import compilation_config;
 import infinity_core;
 import std.compat;
@@ -168,15 +164,6 @@ void SignalHandler(int signal_number, siginfo_t *, void *) {
             raise(signal_number);
             break;
         }
-#if defined(ENABLE_JEMALLOC_PROF) && !defined(__APPLE__)
-        case SIGUSR2: {
-            // http://jemalloc.net/jemalloc.3.html
-            malloc_stats_print(nullptr, nullptr, "admp");
-            int rc = mallctl("prof.dump", nullptr, nullptr, nullptr, 0);
-            infinity::LOG_INFO(fmt::format("Dump memory profile %d", rc));
-            break;
-        }
-#endif
         default: {
             // Ignore
             infinity::LOG_INFO(fmt::format("Other type of signal: {}", strsignal(signal_number)));
@@ -191,9 +178,6 @@ void RegisterSignal() {
     sig_action.sa_sigaction = SignalHandler;
     sigemptyset(&sig_action.sa_mask);
     sigaction(SIGUSR1, &sig_action, nullptr);
-#ifdef ENABLE_JEMALLOC_PROF
-    sigaction(SIGUSR2, &sig_action, nullptr);
-#endif
     sigaction(SIGINT, &sig_action, nullptr);
     sigaction(SIGQUIT, &sig_action, nullptr);
     sigaction(SIGTERM, &sig_action, nullptr);

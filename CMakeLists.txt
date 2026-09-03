@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 4.0.3...4.4.2)
 
+# Checked before project(), so that a wrong platform is reported as a wrong platform
+# rather than as whatever toolchain or SDK probe happens to fail first. CMAKE_SYSTEM_NAME
+# is not populated until project() runs, so this uses the host name; the post-project()
+# guard below catches cross-compilation.
+if (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    message(FATAL_ERROR
+            "This is an Apple-Silicon-only fork of Infinity; the host is "
+            "'${CMAKE_HOST_SYSTEM_NAME}'. Use upstream infiniflow/infinity for other platforms.")
+endif ()
+
 cmake_policy(SET CMP0167 OLD)
 
 set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS TRUE)
@@ -34,6 +44,16 @@ endif ()
 set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_SOURCE_DIR}/ports")
 
 project(infinity VERSION 0.7.3)
+
+# This fork targets Apple Silicon exclusively. The Linux and x86-64 build paths have
+# been removed rather than left dormant, so failing here is more honest than
+# configuring into a build that cannot work. If you need Linux or x86-64, use
+# upstream infiniflow/infinity.
+if (NOT APPLE)
+    message(FATAL_ERROR
+            "This is an Apple-Silicon-only fork of Infinity; CMAKE_SYSTEM_NAME is "
+            "'${CMAKE_SYSTEM_NAME}'. Use upstream infiniflow/infinity for other platforms.")
+endif ()
 
 if (APPLE AND CMAKE_CXX_STDLIB_MODULES_JSON STREQUAL "libc++.modules.json")
     get_filename_component(CXX_COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
@@ -72,14 +92,8 @@ if (CLANG_VERSION_STRING VERSION_GREATER_EQUAL 20)
 
     # add_compile_options(-ftime-trace)
     #    add_compile_options(-fmodule-header)
-    if (NOT CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        add_link_options(-fuse-ld=mold)
-    endif ()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-unused-parameter -Wno-unused-private-field")
 
-    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        add_link_options(-L/usr/local/lib)
-    endif ()
     set(CMAKE_FIND_PACKAGE_SORT_ORDER NATURAL)
     set(CMAKE_FIND_PACKAGE_SORT_DIRECTION DEC)
 
@@ -89,25 +103,25 @@ else ()
 
 endif ()
 
+# CMAKE_SYSTEM_PROCESSOR is unreliable on Apple, so the target comes from
+# CMAKE_OSX_ARCHITECTURES (set by the presets) and falls back to the host.
 set(INFINITY_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
-if (APPLE AND CMAKE_OSX_ARCHITECTURES)
+if (CMAKE_OSX_ARCHITECTURES)
     set(INFINITY_TARGET_PROCESSOR "${CMAKE_OSX_ARCHITECTURES}")
 endif ()
 
-if (INFINITY_TARGET_PROCESSOR MATCHES "^(arm64|aarch64)$")
-    set(ARM64 TRUE)
-elseif (INFINITY_TARGET_PROCESSOR MATCHES "^(x86_64|amd64)$")
-    set(X86_64 TRUE)
+if (NOT INFINITY_TARGET_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    message(FATAL_ERROR
+            "This fork builds for arm64 only; target processor is "
+            "'${INFINITY_TARGET_PROCESSOR}'. Building for x86-64 macOS is not supported: "
+            "the distance kernels are arm64 NEON and there is no x86 fallback.")
 endif ()
+set(ARM64 TRUE)
 
-if(ARM64)
-   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DSIMDE_ENABLE_NATIVE_ALIASES")
-   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DSIMDE_ENABLE_NATIVE_ALIASES")
-endif ()
-
-if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -static-libgcc")
-endif ()
+# SIMDe still lowers the remaining x86 intrinsics in third_party (FastPFor, newpfor).
+# src/ is being migrated to hand-written NEON; this define goes away with the last of them.
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DSIMDE_ENABLE_NATIVE_ALIASES")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DSIMDE_ENABLE_NATIVE_ALIASES")
 
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
@@ -231,19 +245,13 @@ endif ()
 # attach additional cmake modules
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
-# You can disable jemalloc by passing the `-DENABLE_JEMALLOC=OFF` option to CMake.
-option(ENABLE_JEMALLOC "Enable jemalloc support" ON)
-if ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-    message(STATUS "Disable jemalloc in Debug mode")
-    set(ENABLE_JEMALLOC OFF)
-endif ()
-
-if (ENABLE_JEMALLOC)
-    pkg_check_modules(JEMALLOC REQUIRED jemalloc)
-    set(JEMALLOC_STATIC_LIB "${VCPKG_PROJECT_ROOT}/${VCPKG_TARGET_TRIPLET}/lib/libjemalloc_pic.a")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DENABLE_JEMALLOC_PROF")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DENABLE_JEMALLOC_PROF")
-endif ()
+# jemalloc is gone. It was never enabled on this platform: the hardcoded
+# libjemalloc_pic.a path was Linux-only and the macOS presets set ENABLE_JEMALLOC=OFF.
+# Profiling this fork's index build put allocator paths at 0.39% of total time, so
+# there is nothing to recover by wiring it up against Apple's allocator.
+#
+# Removing it also unblocks the sanitizers below, which were disabled whenever jemalloc
+# was on. ThreadSanitizer in particular is needed to verify the concurrency work.
 
 if (NOT CMAKE_BUILD_TYPE)
     if (EXISTS "${CMAKE_SOURCE_DIR}/.git")
@@ -286,37 +294,31 @@ elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
 
     message(STATUS "Code Coverage = ${CODE_COVERAGE}")
 
-    if (NOT ENABLE_JEMALLOC)
-        if (ENABLE_SANITIZER_THREAD AND ENABLE_SANITIZER_ADDRESS)
-            message(FATAL_ERROR "Could not enable THREAD-SANITIZER and ADDRESS-SANITIZER simultaneously.")
-        endif ()
-        if (ENABLE_SANITIZER_ADDRESS)
-            add_compile_options(-fsanitize=address -fsanitize=leak)
-            add_link_options(-fsanitize=address -fsanitize=leak)
-            message(STATUS "Enable Address Sanitizer in target: infinity")
-        endif ()
-        if (ENABLE_SANITIZER_THREAD)
-            add_compile_options(-fsanitize=thread)
-            add_link_options(-fsanitize=thread)
-            message(STATUS "Enable Thread Sanitizer in target: infinity")
-        endif ()
+    if (ENABLE_SANITIZER_THREAD AND ENABLE_SANITIZER_ADDRESS)
+        message(FATAL_ERROR "Could not enable THREAD-SANITIZER and ADDRESS-SANITIZER simultaneously.")
+    endif ()
+    if (ENABLE_SANITIZER_ADDRESS)
+        add_compile_options(-fsanitize=address -fsanitize=leak)
+        add_link_options(-fsanitize=address -fsanitize=leak)
+        message(STATUS "Enable Address Sanitizer in target: infinity")
+    endif ()
+    if (ENABLE_SANITIZER_THREAD)
+        add_compile_options(-fsanitize=thread)
+        add_link_options(-fsanitize=thread)
+        message(STATUS "Enable Thread Sanitizer in target: infinity")
+    endif ()
+    if (ENABLE_SANITIZER_UNDEFINED)
+        add_compile_options(-fsanitize=undefined)
+        add_link_options(-fsanitize=undefined)
+        message(STATUS "Enable Undefined Behavior Sanitizer in target: infinity")
+    endif ()
 
-        if (ENABLE_SANITIZER_UNDEFINED)
-            add_compile_options(-fsanitize=undefined)
-            add_link_options(-fsanitize=undefined)
-            message(STATUS "Enable Undefined Behavior Sanitizer in target: infinity")
-        endif ()
-
-        message(STATUS "Enable Sanitizer in target: infinity")
-
+    if (ENABLE_SANITIZER_ADDRESS OR ENABLE_SANITIZER_THREAD OR ENABLE_SANITIZER_UNDEFINED)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-stack-protector -fno-var-tracking ")
         add_compile_options(-fsanitize-recover=all)
         add_link_options(-fsanitize-recover=all)
-
         add_compile_options("-fno-omit-frame-pointer")
         add_link_options("-fno-omit-frame-pointer")
-    else ()
-        message(STATUS "Disable AddressSanitizer because jemalloc")
     endif ()
 
     set(CMAKE_DEBUG_POSTFIX "")
@@ -326,26 +328,18 @@ else ()
 endif ()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-asm-operand-widths -Wno-unused-command-line-argument -Wno-deprecated-declarations -Wextra -Wno-unused-parameter -Wno-unused-private-field -fcolor-diagnostics")
-if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -pthread")
-endif ()
-
 MESSAGE(STATUS "C++ Compilation flags: " ${CMAKE_CXX_FLAGS})
 
-if (NOT CMAKE_CROSSCOMPILING AND NOT APPLE)
-    add_compile_options(-march=native)
-endif ()
-
-if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    execute_process(
-            COMMAND bash -c "zgrep CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y /proc/config.gz 2>/dev/null; grep CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y /boot/config-$(uname -r) 2>/dev/null"
-            OUTPUT_VARIABLE HAVE_EFFICIENT_UNALIGNED_ACCESS
-            OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if ("${HAVE_EFFICIENT_UNALIGNED_ACCESS}" STREQUAL "CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y")
-        message(STATUS "Found CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y")
-        add_definitions(-DHAVE_EFFICIENT_UNALIGNED_ACCESS)
-    endif ()
-endif ()
+# No -march=native: releases must run on every Apple Silicon generation, and the
+# baseline arm64 ISA already has everything the kernels use. Per-chip tuning belongs in
+# runtime dispatch, not in the compiled baseline.
+#
+# The kernel-config probe for CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS is gone with the
+# Linux support it belonged to. It is not replaced by an unconditional definition:
+# measured on clang 20 / arm64, the byte-shift fallback in
+# src/storage/invertedindex/fst/bytes.cppm and an unaligned load compile to the SAME
+# single `ldr`, so the define bought nothing here. Those helpers now use memcpy, which
+# is well defined and produces that same instruction.
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     ADD_DEFINITIONS(-D INFINITY_DEBUG)

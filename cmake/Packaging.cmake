@@ -30,42 +30,24 @@ endif ()
 # cpack includes specific files in the package without actually installing them.
 # CMAKE_INSTALL_PREFIX defaults to "/usr/local".
 # ---------------------------------------------------------------------------
-set(CMAKE_INSTALL_PREFIX /usr)
-install(TARGETS infinity DESTINATION bin)
-install(FILES conf/infinity.service DESTINATION lib/systemd/system)
+# Relocatable layout, not a system install. /usr is protected by SIP on macOS and
+# cannot be written to at all, and there is no systemd unit to install any more.
+# scripts/apple_silicon/make_package.sh produces the artifact that is actually shipped
+# (and self-tests it by running the server from a relocated copy); these rules exist so
+# `cmake --install` still lays down something sane.
+install(TARGETS infinity DESTINATION libexec)
 install(FILES conf/infinity_conf.toml DESTINATION etc)
+# The full-text analyzers load their dictionaries from resource_dir at runtime, so a
+# package without this tree has broken CJK/RAG/IK search. Upstream's install rules
+# omitted it entirely.
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resource/" DESTINATION share/infinity/resource)
 
 # ---------------------------------------------------------------------------
-# RPM generator
-# https://cmake.org/cmake/help/latest/cpack_gen/rpm.html
-# CPackRPM needs the absolute path of the file as CPack does not know that
-# script is relative to source tree.
+# Generators
 # ---------------------------------------------------------------------------
-set(CPACK_RPM_POST_INSTALL_SCRIPT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/conf/postinst")
-
-if (NOT APPLE)
-    find_program(LLVM_STRIP_EXECUTABLE
-        NAMES llvm-strip-20 llvm-strip
-        REQUIRED)
-    set(CPACK_RPM_SPEC_MORE_DEFINE "%global __strip ${LLVM_STRIP_EXECUTABLE}")
-endif ()
-
-# ---------------------------------------------------------------------------
-# DEB generator
-# https://cmake.org/cmake/help/latest/cpack_gen/deb.html
-# Note: DEB requires the file name be one of postinst, postrm, prerm and the
-# "+x" permission, while rpm doesn't require that.
-# ---------------------------------------------------------------------------
-set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_CURRENT_SOURCE_DIR}/conf/postinst")
-
-# ---------------------------------------------------------------------------
-# Generators & misc
-# ---------------------------------------------------------------------------
-if (APPLE)
-    set(CPACK_GENERATOR "TGZ")
-else ()
-    set(CPACK_GENERATOR "RPM;DEB;TGZ")
-endif ()
+# TGZ only. The RPM and DEB generators went with Linux support, along with the
+# conf/postinst maintainer script and the systemd unit they installed.
+set(CPACK_GENERATOR "TGZ")
 
 # Enable CPack debug output
 set(CPACK_PACKAGE_DEBUG True)

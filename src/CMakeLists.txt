@@ -373,7 +373,6 @@ target_link_libraries(infinity
         oatpp::oatpp
         Parquet::parquet_static
         Arrow::arrow_static
-        ${JEMALLOC_STATIC_LIB}
         miniocpp::miniocpp
         pugixml::static
         curlpp_static
@@ -463,7 +462,6 @@ target_link_libraries(unit_test
         oatpp::oatpp
         Parquet::parquet_static
         Arrow::arrow_static
-        ${JEMALLOC_STATIC_LIB}
         miniocpp::miniocpp
         pugixml::static
         curlpp_static
