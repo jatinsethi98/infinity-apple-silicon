@@ -1,0 +1,271 @@
+{
+  "timestamp": "20260903T053405Z",
+  "config": {
+    "dataset": "/Users/jatinsethi/Projects/datasets/sift1m/base.f32",
+    "n": 1000000,
+    "d": 128,
+    "seed": 0,
+    "m": 32,
+    "efc": 200,
+    "ef_list": [
+      32,
+      64,
+      128,
+      256
+    ],
+    "participants": 10,
+    "pairs": 1,
+    "chunk_size": 8192,
+    "query_count": 1000,
+    "build_grain": 1,
+    "timeout": 1800,
+    "recall_deficit_threshold": 0.005
+  },
+  "binaries": {
+    "infinity": "build/bench/infinity_hnsw_d0",
+    "faiss": "build/bench/faiss_hnsw_d0"
+  },
+  "host": {
+    "on_ac_power": true,
+    "battery_pct": null,
+    "pmset_batt_raw": "Now drawing from 'AC Power'",
+    "thermal_nominal": true,
+    "pmset_therm_raw": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+    "cpu_idle_pct": 81.81,
+    "loadavg_1_5_15": [
+      2.353515625,
+      2.23828125,
+      2.2158203125
+    ],
+    "competing_load_suspected": true,
+    "top_cpu_procs": [
+      {
+        "name": "Google Chrome Helper (Renderer)",
+        "cpu_pct": 19.1
+      },
+      {
+        "name": "WindowServer",
+        "cpu_pct": 19.0
+      },
+      {
+        "name": "Google Chrome Helper",
+        "cpu_pct": 14.7
+      },
+      {
+        "name": "DisplayLinkUserAgent",
+        "cpu_pct": 7.2
+      },
+      {
+        "name": "Python",
+        "cpu_pct": 5.1
+      }
+    ]
+  },
+  "runs": [
+    {
+      "engine": "infinity",
+      "ok": true,
+      "argv": [
+        "build/bench/infinity_hnsw_d0",
+        "/Users/jatinsethi/Projects/datasets/sift1m/base.f32",
+        "1000000",
+        "128",
+        "32",
+        "200",
+        "32",
+        "8192",
+        "1000",
+        "10",
+        "1",
+        "/private/tmp/claude-501/-Users-jatinsethi-Projects/66f8aa02-f04d-4812-ba0a-673ab12bc335/scratchpad/results/20260903T053405Z/sidecar-infinity-p0.json"
+      ],
+      "returncode": 0,
+      "status": "PASS",
+      "valid": 1,
+      "threads": 10,
+      "build_ns": 36004139500,
+      "build_source": "engine_stdout:cold_build_ns",
+      "cold_build_ns_present": true,
+      "wall_ns": 59527417583,
+      "recall_at_10": {
+        "32": 0.7953125,
+        "64": 0.84375,
+        "128": 0.8875,
+        "256": 0.93125
+      },
+      "graph_directed_edges": 30275010,
+      "graph_level0_directed_edges": 29632964,
+      "graph_level0_capacity": 64,
+      "graph_upper_capacity": 32,
+      "graph_level_histogram": "0:968813,1:30225,2:933,3:29",
+      "qps": 25715.093816848886,
+      "query_throughput_operations": 10240,
+      "query_throughput_wall_ns": 398209708,
+      "query_latency_p50_ns": 209083,
+      "query_latency_p95_ns": 236792,
+      "query_latency_p99_ns": 254375,
+      "query_throughput_concurrency": 12,
+      "build_buckets_per_worker": 1,
+      "submitted_tasks": 10,
+      "timed_out": false,
+      "pair": 0,
+      "order": "infinity-first",
+      "raw_path": "/private/tmp/claude-501/-Users-jatinsethi-Projects/66f8aa02-f04d-4812-ba0a-673ab12bc335/scratchpad/results/20260903T053405Z/raw-infinity-p0-infinity-first.txt"
+    },
+    {
+      "engine": "faiss",
+      "ok": true,
+      "argv": [
+        "build/bench/faiss_hnsw_d0",
+        "/Users/jatinsethi/Projects/datasets/sift1m/base.f32",
+        "1000000",
+        "128",
+        "32",
+        "200",
+        "32",
+        "8192",
+        "1000",
+        "10",
+        "1",
+        "/private/tmp/claude-501/-Users-jatinsethi-Projects/66f8aa02-f04d-4812-ba0a-673ab12bc335/scratchpad/results/20260903T053405Z/sidecar-faiss-p0.json"
+      ],
+      "returncode": 0,
+      "status": "PASS",
+      "valid": 1,
+      "threads": 10,
+      "build_ns": 88872992291,
+      "build_source": "engine_stdout:cold_build_ns",
+      "cold_build_ns_present": true,
+      "wall_ns": 128341059500,
+      "recall_at_10": {
+        "32": 0.7484375,
+        "64": 0.7765625,
+        "128": 0.815625,
+        "256": 0.89375
+      },
+      "graph_directed_edges": 30684902,
+      "graph_level0_directed_edges": 30045029,
+      "graph_level0_capacity": 64,
+      "graph_upper_capacity": 32,
+      "graph_level_histogram": "0:968746,1:30276,2:951,3:26,4:1",
+      "qps": 11115.545593860523,
+      "query_throughput_operations": 10240,
+      "query_throughput_wall_ns": 921232333,
+      "query_latency_p50_ns": 468125,
+      "query_latency_p95_ns": 567500,
+      "query_latency_p99_ns": 619125,
+      "query_throughput_concurrency": 12,
+      "build_buckets_per_worker": null,
+      "submitted_tasks": null,
+      "timed_out": false,
+      "pair": 0,
+      "order": "infinity-first",
+      "raw_path": "/private/tmp/claude-501/-Users-jatinsethi-Projects/66f8aa02-f04d-4812-ba0a-673ab12bc335/scratchpad/results/20260903T053405Z/raw-faiss-p0-infinity-first.txt"
+    }
+  ],
+  "aggregate": {
+    "infinity": {
+      "ok_runs": 1,
+      "build_ns": {
+        "median": 36004139500,
+        "min": 36004139500,
+        "max": 36004139500,
+        "rel_mad": 0.0,
+        "n": 1
+      },
+      "vectors_per_sec": 27774.584086365958,
+      "recall_at_10": {
+        "32": 0.7953125,
+        "64": 0.84375,
+        "128": 0.8875,
+        "256": 0.93125
+      },
+      "build_source": "engine_stdout:cold_build_ns",
+      "graph_directed_edges": 30275010,
+      "graph_level0_capacity": 64,
+      "graph_upper_capacity": 32,
+      "qps": {
+        "median": 25715.093816848886,
+        "min": 25715.093816848886,
+        "max": 25715.093816848886,
+        "rel_mad": 0.0,
+        "n": 1
+      },
+      "query_latency_p50_ns": 209083,
+      "query_latency_p95_ns": 236792,
+      "query_latency_p99_ns": 254375,
+      "query_throughput_concurrency": 12,
+      "build_buckets_per_worker": 1,
+      "submitted_tasks": 10
+    },
+    "faiss": {
+      "ok_runs": 1,
+      "build_ns": {
+        "median": 88872992291,
+        "min": 88872992291,
+        "max": 88872992291,
+        "rel_mad": 0.0,
+        "n": 1
+      },
+      "vectors_per_sec": 11252.012273038634,
+      "recall_at_10": {
+        "32": 0.7484375,
+        "64": 0.7765625,
+        "128": 0.815625,
+        "256": 0.89375
+      },
+      "build_source": "engine_stdout:cold_build_ns",
+      "graph_directed_edges": 30684902,
+      "graph_level0_capacity": 64,
+      "graph_upper_capacity": 32,
+      "qps": {
+        "median": 11115.545593860523,
+        "min": 11115.545593860523,
+        "max": 11115.545593860523,
+        "rel_mad": 0.0,
+        "n": 1
+      },
+      "query_latency_p50_ns": 468125,
+      "query_latency_p95_ns": 567500,
+      "query_latency_p99_ns": 619125,
+      "query_throughput_concurrency": 12,
+      "build_buckets_per_worker": null,
+      "submitted_tasks": null
+    }
+  },
+  "recall_gate": {
+    "threshold": 0.005,
+    "per_ef": {
+      "32": {
+        "faiss": 0.7484375,
+        "infinity": 0.7953125,
+        "deficit": -0.046875,
+        "pass": false
+      },
+      "64": {
+        "faiss": 0.7765625,
+        "infinity": 0.84375,
+        "deficit": -0.06718749999999996,
+        "pass": false
+      },
+      "128": {
+        "faiss": 0.815625,
+        "infinity": 0.8875,
+        "deficit": -0.07187499999999991,
+        "pass": false
+      },
+      "256": {
+        "faiss": 0.89375,
+        "infinity": 0.93125,
+        "deficit": -0.03749999999999998,
+        "pass": false
+      }
+    },
+    "pass": false,
+    "missing": []
+  },
+  "build_time_ratio_infinity_over_faiss": 0.4051190195341951,
+  "qps_ratio_infinity_over_faiss": 2.3134351435751537,
+  "all_runs_ok": true,
+  "build_timing_used_wall_clock_fallback": false
+}

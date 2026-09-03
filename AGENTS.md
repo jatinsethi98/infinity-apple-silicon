@@ -97,3 +97,17 @@ When executing shell commands:
 - If an environment variable is required, ask the user to configure it permanently (e.g., via pytest.ini, .env, or shell profile) instead of injecting it inline.
 - ONLY execute direct commands like "pytest", "python -m pytest", or "uv run pytest".
 - NEVER use chained commands with "&&", ";", or "|".
+
+## 7. macOS / Apple Silicon (this fork)
+This repository is the native `arm64-apple-darwin` port of Infinity. On macOS do not use the
+Linux build commands above; use the presets and scripts documented in
+`docs/apple_silicon/README.md`:
+- Toolchain: Homebrew LLVM 20, CMake 4.0.3+, Ninja; `SDKROOT` must be exported.
+- Benchmark harness (no vcpkg): `scripts/apple_silicon/bootstrap_ctpl.sh`, then
+  `cmake --preset bench -S tools/apple_silicon/native_hnsw_smoke` and
+  `cmake --build build/bench --target infinity_hnsw_d0 faiss_hnsw_d0`.
+- Full server: `cmake --preset macos-arm64-release` with `VCPKG_ROOT` set.
+- Any performance claim must follow `scripts/bench/README.md` (paired runs, Accelerate-linked
+  FAISS from `scripts/apple_silicon/build_faiss_accelerate.sh`, recall on official ground truth)
+  and be recorded in `docs/apple_silicon/BENCHMARKS.md` with raw output under
+  `docs/apple_silicon/benchmarks/`.

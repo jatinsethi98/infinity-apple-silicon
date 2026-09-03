@@ -1,5 +1,12 @@
 # Infinity vs FAISS — HNSW index-build baseline (Apple Silicon)
 
+> **This is the lab notebook of the optimization campaign on the M3 Pro (August to 2 September
+> 2026), kept in full including the sections later corrected.** For the current published numbers,
+> the method, and reproduction commands see [BENCHMARKS.md](BENCHMARKS.md). Paths in the commands
+> below refer to that machine; on a fresh checkout use `datasets/sift1m/base.f32` from
+> `scripts/bench/fetch_datasets.py` and `build/bench-faiss-src/faiss_hnsw_d0` from
+> `scripts/apple_silicon/build_faiss_accelerate.sh`.
+
 First honest, real-scale HNSW **index-build** comparison of Infinity's native arm64 port
 against stock FAISS on the same workload. Query latency is out of scope; this measures
 build time and reports recall only to keep the comparison fair.
