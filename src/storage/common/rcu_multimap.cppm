@@ -372,16 +372,32 @@ void RcuMultiMap<Key, Value>::emplace(const Key &key, Args &&...args) {
 template <typename Key, typename Value>
 u32 RcuMultiMap<Key, Value>::range(const Key &key_min, const Key &key_max, std::vector<Value> &result) const {
 
+    // dirty_lock_ is held for the WHOLE traversal, not just long enough to copy the
+    // dirty_map_ pointer. Copying the pointer under the lock and then iterating without
+    // it is a data race: Insert() mutates that same std::multimap under this lock, and an
+    // indexing thread appending to the in-memory secondary index runs concurrently with a
+    // query thread arriving here through
+    // SecondaryIndexInMem::RangeQueryInner (secondary_index_in_mem_impl.cpp). Walking a
+    // red-black tree while another thread rebalances it is undefined behaviour, and the
+    // observable symptoms -- wrong row sets, or a crash -- are non-deterministic.
+    //
+    // The cost is that a range query briefly serialises against inserts on this one
+    // in-memory segment. That is bounded: the structure is per-segment and is dumped and
+    // reset once the mem-index capacity is reached, so it never grows to the size of the
+    // table.
+    //
+    // read_map_ needs no such care here: it is written once in the constructor and never
+    // republished, because the only store to it lives in CheckSwapInLock() whose sole
+    // caller is Get(), which no production path calls. It is an always-empty map. Do NOT
+    // take that as licence to call Get(): that path frees the old map with no reader
+    // grace period and would race.
+    std::lock_guard<std::mutex> lock(dirty_lock_);
+
     InnerMultiMap *current_read = read_map_;
     auto read_begin = current_read->lower_bound(key_min);
     auto read_end = current_read->upper_bound(key_max);
 
-    InnerMultiMap *dirty_snapshot = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(dirty_lock_);
-        dirty_snapshot = dirty_map_;
-    }
-
+    InnerMultiMap *dirty_snapshot = dirty_map_;
     auto dirty_begin = dirty_snapshot->lower_bound(key_min);
     auto dirty_end = dirty_snapshot->upper_bound(key_max);
 
@@ -422,6 +438,14 @@ u32 RcuMultiMap<Key, Value>::range(const Key &key_min, const Key &key_max, std::
 }
 
 // RcuMap implementation using std::map (std::map) as inner map
+//
+// NOTE ON SCOPE: the design notes below describe RcuMap, which does implement the reader
+// reference counting and grace-period reclamation they describe (see rcu_reader_count_
+// and the acquire/release pairs in its accessors). They do NOT describe RcuMultiMap
+// above, which has no reader counting: its read_map_ is written once at construction and
+// never republished, and every one of its accessors -- including range(), which formerly
+// did not -- holds dirty_lock_ for the whole traversal. Do not read "lock-free reads"
+// below as a statement about RcuMultiMap.
 //
 // DESIGN CONSIDERATIONS FOR CONCURRENT ACCESS:
 //

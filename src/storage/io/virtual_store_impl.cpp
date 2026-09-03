@@ -124,7 +124,18 @@ std::tuple<std::unique_ptr<LocalFileHandle>, Status> VirtualStore::Open(const st
             break;
         }
         case FileAccessMode::kWrite: {
-            fd = open(path.c_str(), O_RDWR | O_CREAT, 0666);
+            // O_TRUNC matters: without it, writing a shorter payload over a longer
+            // existing file leaves the previous tail in place, because writers start at
+            // offset 0. The visible symptom was COPY TO producing a file containing a
+            // valid short export followed by garbage from an earlier, longer one.
+            //
+            // Safe as a blanket change because all 22 production kWrite call sites were
+            // audited and every one writes a whole file; none reads existing content or
+            // patches at an offset. Note LocalFileHandle::Seek() does exist, so this rests
+            // on that audit rather than on the API being incapable of seeking -- a future
+            // caller that wants to patch in place needs its own access mode.
+            // kWrite means "create or replace this entire file".
+            fd = open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
             break;
         }
         case FileAccessMode::kMmapRead: {
