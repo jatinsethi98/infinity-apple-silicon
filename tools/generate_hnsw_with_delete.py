@@ -4,9 +4,10 @@
 import argparse
 import os
 import random
+import shutil
 
 
-def generate(generate_if_exists: bool, copy: bool):
+def generate(generate_if_exists: bool, copy_dir: str):
     row_n = 10
     table_name = "test_delete_with_hnsw_big"
     index_name = "hnsw_index"
@@ -28,7 +29,6 @@ def generate(generate_if_exists: bool, copy: bool):
     csv_name = f"{table_name}.csv"
     slt_name = f"{table_name}.slt"
 
-    copy_dir = "/var/infinity/test_data"
     copy_path = copy_dir + "/" + csv_name
 
     csv_path = csv_dir + "/" + csv_name
@@ -37,10 +37,19 @@ def generate(generate_if_exists: bool, copy: bool):
     os.makedirs(csv_dir, exist_ok=True)
     os.makedirs(slt_dir, exist_ok=True)
     if os.path.exists(csv_path) and os.path.exists(slt_path) and not generate_if_exists:
-        print(
-            f"File {slt_path} and {csv_path} already existed exists. Skip Generating."
-        )
-        return
+        # The .slt embeds copy_path, so skipping outright would leave a previously
+        # generated file pointing at a different copy_dir than the caller asked for,
+        # and would also skip staging the data there. Stage the existing CSV and fall
+        # through to rewrite the .slt only when the destination has changed.
+        if copy_dir and not os.path.exists(copy_path):
+            os.makedirs(copy_dir, exist_ok=True)
+            shutil.copyfile(csv_path, copy_path)
+        if copy_path in open(slt_path, encoding="utf-8").read():
+            print(
+                f"File {slt_path} and {csv_path} already existed exists. Skip Generating."
+            )
+            return
+        print(f"Regenerating {slt_path}: copy_dir changed to {copy_dir}")
 
     x = [i for i in range(row_n)]
     random.shuffle(x)
@@ -82,9 +91,9 @@ def generate(generate_if_exists: bool, copy: bool):
     with open(csv_path, "w") as csv_file:
         csv_file.writelines(f"{to_csv_embedding(v_x)},{v_y}\n" for v_x, v_y in zip(x, y))
 
-    if copy:
+    if copy_dir:
         os.makedirs(copy_dir, exist_ok=True)
-        os.system(f"cp {csv_path} {copy_path}")
+        shutil.copyfile(csv_path, copy_path)
 
     with open(slt_path, "w") as slt_file:
         slt_file.write("statement ok\n")
@@ -99,7 +108,7 @@ def generate(generate_if_exists: bool, copy: bool):
 
         slt_file.write("query I\n")
         slt_file.write(
-            f"COPY {table_name} FROM '/var/infinity/test_data/{csv_name}' WITH ( DELIMITER ',', FORMAT CSV );\n"
+            f"COPY {table_name} FROM '{copy_path}' WITH ( DELIMITER ',', FORMAT CSV );\n"
         )
         slt_file.write("----\n")
         slt_file.write("\n")
@@ -165,8 +174,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "-c",
         "--copy",
-        type=bool,
-        default=True,
+        type=str,
+        default="/var/infinity/test_data",
         dest="copy_dir",
     )
     args = parser.parse_args()

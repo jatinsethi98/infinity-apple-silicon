@@ -5,7 +5,7 @@ import subprocess
 import sys
 import threading
 import time
-from shutil import copyfile
+from shutil import copyfile, rmtree
 
 from generate_aggregate import generate as generate5
 from generate_big import generate as generate1
@@ -169,10 +169,43 @@ if __name__ == "__main__":
 
     print("Generate file finished.")
 
-    # remove all file in tmp directory and create an empty tmp
-    if os.path.exists("/var/infinity/test_data/tmp"):
-        os.system("rm -rf /var/infinity/test_data/tmp")
-    os.makedirs("/var/infinity/test_data/tmp")
+    # remove all file in tmp directory and create an empty tmp.
+    # Derive it from args.copy rather than hardcoding the default: -c/--copy is
+    # meant to relocate the whole staging area, and hardcoding it here made the
+    # flag silently ineffective (and unusable anywhere /var/infinity is not
+    # writable, such as a non-root macOS checkout).
+    # args.copy comes from the command line and this deletes <copy>/tmp recursively,
+    # and CI runs this as root. Rather than guess which roots are "obviously wrong",
+    # require the staging directory to carry a marker file that this script itself
+    # wrote. A directory without the marker is not ours, so we do not delete inside it.
+    #
+    # Resolve symlinks first: a guard applied to the pre-resolution path can be
+    # redirected by a symlinked parent, and it is the resolved target that gets removed.
+    copy_root = os.path.realpath(args.copy)
+    os.makedirs(copy_root, exist_ok=True)
+    marker = os.path.join(copy_root, ".infinity-test-staging")
+    tmp_dir = os.path.realpath(os.path.join(copy_root, "tmp"))
+
+    if os.path.dirname(copy_root) == copy_root:
+        sys.exit(f"error: -c/--copy must not be the filesystem root: {copy_root}")
+    if not os.path.exists(marker):
+        if os.listdir(copy_root):
+            sys.exit(
+                f"error: refusing to use {copy_root} as the test staging directory.\n"
+                "  It is not empty and has no .infinity-test-staging marker, so it was not\n"
+                "  created by this script and its 'tmp' subdirectory will not be deleted.\n"
+                "  Point -c/--copy at a dedicated directory."
+            )
+        open(marker, "w").close()
+
+    # And the thing actually being removed must still be inside the staging root after
+    # symlink resolution.
+    if os.path.commonpath([copy_root, tmp_dir]) != copy_root or tmp_dir == copy_root:
+        sys.exit(f"error: {tmp_dir} resolves outside the staging directory {copy_root}")
+
+    if os.path.exists(tmp_dir):
+        rmtree(tmp_dir)
+    os.makedirs(tmp_dir)
 
     print("Start copying data...")
     if args.just_copy_all_data is True:

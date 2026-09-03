@@ -32,6 +32,7 @@
 # )
 import argparse
 import copy
+import hashlib
 import logging
 import math
 import os
@@ -73,7 +74,32 @@ class RagTokenizer:
     def rkey_(self, line):
         return str(("DD" + (line[::-1].lower())).encode("utf-8"))[2:-1]
 
-    def _load_dict(self, fnm):
+    @staticmethod
+    def _trie_cache_path(dict_path):
+        """Where to cache the compiled trie for a dictionary we do not own.
+
+        Used for the DEFAULT dictionary only, which may resolve to a read-only install
+        or to the repository's resource/ tree — and resource/ is a git submodule, so
+        writing a sidecar beside it leaves an untracked file inside another repository.
+
+        A user-supplied dictionary keeps its `<dict>.trie` sidecar instead; see
+        _load_dict. That is not merely a convention: prepare_huqie.py builds the wheel
+        by calling load_user_dict() and then requiring the sidecar to exist.
+
+        Namespaced by a hash of the dictionary's absolute path so two dictionaries
+        cannot collide in the cache.
+        """
+        cache_root = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+        digest = hashlib.sha256(os.path.abspath(dict_path).encode("utf-8")).hexdigest()[:16]
+        return os.path.join(cache_root, "infinity", "rag_tokenizer", f"{digest}.trie")
+
+    def _load_dict(self, fnm, cache_path=None):
+        """Build the trie from dictionary `fnm` and save it.
+
+        `cache_path` is where the compiled trie is written. Default None means the
+        conventional `<fnm>.trie` sidecar, which is what a caller passing its own
+        dictionary expects and what the wheel build depends on.
+        """
         logging.info(f"[HUQIE]:Build trie from {fnm}")
         try:
             of = open(fnm, "r", encoding="utf-8")
@@ -89,7 +115,10 @@ class RagTokenizer:
                     self.trie_[self.key_(line[0])] = (F, line[2])
                 self.trie_[self.rkey_(line[0])] = 1
 
-            dict_file_cache = fnm + ".trie"
+            dict_file_cache = cache_path if cache_path is not None else fnm + ".trie"
+            cache_parent = os.path.dirname(dict_file_cache)
+            if cache_parent:
+                os.makedirs(cache_parent, exist_ok=True)
             logging.info(f"[HUQIE]:Build trie cache to {dict_file_cache}")
             self.trie_.save(dict_file_cache)
             of.close()
@@ -107,15 +136,30 @@ class RagTokenizer:
             if user_dict and not os.path.exists(user_dict):
                 logging.warning(f"User dictionary not found: {user_dict}, using default")
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            resource_dir = "/usr/share/infinity/resource/rag"
-            current_dir_huqie = os.path.join(current_dir, "huqie.txt")
-            resource_dir_huqie = os.path.join(resource_dir, "huqie.txt")
-            if os.path.exists(current_dir_huqie):
-                self.DIR_ = current_dir_huqie
-            elif os.path.exists(resource_dir_huqie):
-                self.DIR_ = resource_dir_huqie
+            # Candidates in priority order. The installed location is kept ahead of
+            # the in-tree one so an installed deployment resolves exactly as before;
+            # the in-tree candidate exists because the dictionaries are checked into
+            # resource/rag, and a source checkout has no /usr/share/infinity (true on
+            # macOS always, and on Linux unless CI bind-mounts it there).
+            candidates = []
+            env_dir = os.environ.get("INFINITY_RESOURCE_DIR")
+            if env_dir:
+                candidates.append(os.path.join(env_dir, "rag"))
+            candidates.append(current_dir)
+            candidates.append("/usr/share/infinity/resource/rag")
+            # python/infinity_sdk/infinity/ -> repo root -> resource/rag
+            repo_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
+            candidates.append(os.path.join(repo_root, "resource", "rag"))
+
+            for candidate in candidates:
+                candidate_huqie = os.path.join(candidate, "huqie.txt")
+                if os.path.exists(candidate_huqie):
+                    self.DIR_ = candidate_huqie
+                    break
             else:
-                logging.error(f"Dictionary huqie.txt not found in {current_dir} and {resource_dir}")
+                logging.error(
+                    "Dictionary huqie.txt not found in any of: " + ", ".join(candidates)
+                )
                 exit(1)
             logging.info(f"Using default dictionary: {self.DIR_}")
 
@@ -125,7 +169,12 @@ class RagTokenizer:
 
         self.SPLIT_CHAR = r"([ ,\.<>/?;:'\[\]\\`!@#$%^&*\(\)\{\}\|_+=《》，。？、；‘’：“”【】~！￥%……（）——-]+|[a-zA-Z0-9,\.-]+)"
 
-        trie_file_name = self.DIR_ + ".trie"
+        trie_file_name = self._trie_cache_path(self.DIR_)
+        # A previously built cache may still sit beside the dictionary from an older
+        # version; prefer it over rebuilding, but never write there.
+        legacy_cache = self.DIR_ + ".trie"
+        if not os.path.exists(trie_file_name) and os.path.exists(legacy_cache):
+            trie_file_name = legacy_cache
         # check if trie file existence
         if os.path.exists(trie_file_name):
             try:
@@ -141,8 +190,9 @@ class RagTokenizer:
             logging.info(f"[HUQIE]:Trie file {trie_file_name} not found, build the default trie file")
             self.trie_ = datrie.Trie(string.printable)
 
-        # load data from dict file and save to trie file
-        self._load_dict(self.DIR_)
+        # Load the default dictionary, caching the compiled trie outside the dictionary's
+        # own directory: self.DIR_ may be a read-only install or the resource/ submodule.
+        self._load_dict(self.DIR_, cache_path=self._trie_cache_path(self.DIR_))
 
     def load_user_dict(self, fnm):
         try:
