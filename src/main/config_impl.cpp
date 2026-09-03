@@ -639,7 +639,7 @@ Status Config::Init(const std::shared_ptr<std::string> &config_path, DefaultConf
         }
 
         // Flush Method At Commit
-        FlushOptionType flush_option_type = FlushOptionType::kFlushAtOnce;
+        FlushOptionType flush_option_type = FlushOptionType::kFullFsync;
         std::unique_ptr<FlushOption> wal_flush_option = std::make_unique<FlushOption>(WAL_FLUSH_OPTION_NAME, flush_option_type);
         status = global_options_.AddOption(std::move(wal_flush_option));
         if (!status.ok()) {
@@ -2412,16 +2412,32 @@ Status Config::Init(const std::shared_ptr<std::string> &config_path, DefaultConf
                         }
                         case GlobalOptionIndex::kFlushMethodAtCommit: {
                             // Flush Method At Commit
-                            FlushOptionType flush_option_type = FlushOptionType::kFlushAtOnce;
+                            FlushOptionType flush_option_type = FlushOptionType::kFullFsync;
                             if (elem.second.is_string()) {
                                 std::string flush_option_str = elem.second.value_or("flush_at_once");
                                 ToLower(flush_option_str);
-                                if (flush_option_str == "flush_at_once") {
-                                    flush_option_type = FlushOptionType::kFlushAtOnce;
-                                } else if (flush_option_str == "only_write") {
-                                    flush_option_type = FlushOptionType::kFlushAtOnce;
+                                // These now map to genuinely different behaviour. Before, all
+                                // three produced kFlushAtOnce and none of them synced, so the
+                                // setting was inert.
+                                if (flush_option_str == "full_fsync") {
+                                    flush_option_type = FlushOptionType::kFullFsync;
+                                } else if (flush_option_str == "fsync") {
+                                    flush_option_type = FlushOptionType::kFsync;
+                                } else if (flush_option_str == "no_sync") {
+                                    flush_option_type = FlushOptionType::kNoSync;
+                                    // Legacy names, kept so existing configs still load. Each maps
+                                    // to the level that matches what its name claimed:
+                                    //   flush_at_once    -> durable        (full_fsync)
+                                    //   flush_per_second -> os-crash safe  (fsync)
+                                    //   only_write       -> no sync at all (no_sync)
+                                    // Note "flush_at_once" now really does cost a device flush,
+                                    // where previously it did nothing.
+                                } else if (flush_option_str == "flush_at_once") {
+                                    flush_option_type = FlushOptionType::kFullFsync;
                                 } else if (flush_option_str == "flush_per_second") {
-                                    flush_option_type = FlushOptionType::kFlushAtOnce;
+                                    flush_option_type = FlushOptionType::kFsync;
+                                } else if (flush_option_str == "only_write") {
+                                    flush_option_type = FlushOptionType::kNoSync;
                                 } else {
                                     return Status::InvalidConfig(fmt::format("Unsupported flush option: {}", flush_option_str));
                                 }
@@ -2480,7 +2496,7 @@ Status Config::Init(const std::shared_ptr<std::string> &config_path, DefaultConf
 
                 if (global_options_.GetOptionByIndex(GlobalOptionIndex::kFlushMethodAtCommit) == nullptr) {
                     // Flush Method At Commit
-                    FlushOptionType flush_option_type = FlushOptionType::kFlushAtOnce;
+                    FlushOptionType flush_option_type = FlushOptionType::kFullFsync;
                     std::unique_ptr<FlushOption> wal_flush_option = std::make_unique<FlushOption>(WAL_FLUSH_OPTION_NAME, flush_option_type);
                     Status status = global_options_.AddOption(std::move(wal_flush_option));
                     if (!status.ok()) {

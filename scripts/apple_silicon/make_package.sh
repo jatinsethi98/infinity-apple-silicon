@@ -4,11 +4,9 @@
 #
 # Why a relocatable tarball rather than CPack's install rules
 # ----------------------------------------------------------
-# cmake/Packaging.cmake targets a Linux system install: CMAKE_INSTALL_PREFIX is
-# /usr, it ships conf/infinity.service (a systemd unit, meaningless on macOS), and
-# it installs no resource/ tree at all -- so a package built from it has none of the
-# analyzer dictionaries and every CJK/RAG/IK full-text index fails at runtime.
-# On macOS /usr is additionally protected by SIP and cannot be written to.
+# cmake/Packaging.cmake installs into a fixed prefix and is aimed at `cmake --install`.
+# It is not what ships: a shipped artifact has to be relocatable, because /usr is
+# protected by SIP on macOS and users unpack a tarball wherever they like.
 #
 # So this produces a tree that runs from wherever it is unpacked, with no
 # privileged step and no assumption that /var/infinity or /usr/share/infinity
@@ -135,7 +133,7 @@ memindex_memory_quota    = "1GB"
 wal_dir                  = "@DATA@/wal"
 checkpoint_interval      = "86400s"
 wal_compact_threshold    = "1GB"
-wal_flush                = "flush_at_once"
+wal_flush                = "full_fsync"
 
 [resource]
 resource_dir             = "@PREFIX@/share/infinity/resource"

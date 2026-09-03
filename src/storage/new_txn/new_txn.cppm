@@ -803,6 +803,11 @@ private:
     std::mutex commit_lock_{};
     std::condition_variable commit_cv_{};
     bool commit_bottom_done_{false};
+    // Distinguishes "the bottom half finished" from "the bottom half was cancelled at
+    // shutdown". Both used to set only commit_bottom_done_, so a cancelled transaction
+    // woke Commit() and was reported to the client as committed OK even though its WAL
+    // bytes may never have been written, let alone synced.
+    bool commit_bottom_cancelled_{false};
 
     // KV txn instance
     std::unique_ptr<KVInstance> kv_instance_{};

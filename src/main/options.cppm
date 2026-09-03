@@ -80,25 +80,46 @@ export struct LogLevelOption : public BaseOption {
     LogLevel value_{};
 };
 
+// WAL durability level, in increasing order of guarantee and cost.
+//
+// The names describe what actually happens, because the previous ones did not: all three
+// of "flush_at_once", "only_write" and "flush_per_second" were mapped to the same enum
+// value and all three did nothing but flush the stream buffer, so the setting had no
+// effect and none of the three names was true.
+//
+// Costs measured on an Apple internal SSD (APFS), per sync. The flush loop syncs once per
+// batch of transactions, so these are amortised across a batch under concurrent load; a
+// single serial client pays one per commit.
 export enum class FlushOptionType {
-    kFlushAtOnce,
-    kOnlyWrite,
-    kFlushPerSecond,
+    // fsync + F_FULLFSYNC. Survives power loss. ~2.3 ms.
+    //
+    // On Darwin fsync alone is not enough: it returns once the data has reached the
+    // drive, without waiting for the drive to flush its own write cache. F_FULLFSYNC
+    // waits. This is the default because this WAL is the only durability mechanism in the
+    // engine -- RocksDB's own WAL is disabled -- so anything weaker means an acknowledged
+    // commit can vanish.
+    kFullFsync,
+    // No sync at all: bytes reach the OS page cache and no further. Survives the process
+    // dying, does NOT survive the machine dying. ~1.5 us. For benchmarks and throwaway
+    // data.
+    kNoSync,
+    // fsync only. Survives an OS crash but not power loss, per the note above. ~28 us.
+    kFsync,
 };
 
 export std::string FlushOptionTypeToString(FlushOptionType flush_option_type) {
     std::string flush_str;
     switch (flush_option_type) {
-        case FlushOptionType::kFlushAtOnce: {
-            flush_str = "FlushAtOnce";
+        case FlushOptionType::kFullFsync: {
+            flush_str = "full_fsync";
             break;
         }
-        case FlushOptionType::kOnlyWrite: {
-            flush_str = "OnlyWrite";
+        case FlushOptionType::kNoSync: {
+            flush_str = "no_sync";
             break;
         }
-        case FlushOptionType::kFlushPerSecond: {
-            flush_str = "FlushPerSecond";
+        case FlushOptionType::kFsync: {
+            flush_str = "fsync";
             break;
         }
     }

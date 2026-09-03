@@ -2133,6 +2133,13 @@ Status NewTxn::Commit() {
     // Wait until CommitTxnBottom is done.
     std::unique_lock<std::mutex> lk(commit_lock_);
     commit_cv_.wait(lk, [this] { return commit_bottom_done_; });
+    if (commit_bottom_cancelled_) {
+        // Shutdown cancelled this transaction's bottom half (CancelCommitBottom), which
+        // already marked it rolled back. Its WAL bytes may never have been written and
+        // certainly were not synced, so reporting OK here would be telling the client a
+        // transaction is durable when it does not exist. Report the rollback instead.
+        return Status::TxnRollback(txn_context_ptr_->txn_id_, "transaction cancelled during shutdown");
+    }
     PostCommit();
     SetTxnCommitted();
     return Status::OK();
@@ -4660,6 +4667,7 @@ void NewTxn::CancelCommitBottom() {
     SetTxnRollbacked();
     std::unique_lock<std::mutex> lk(commit_lock_);
     commit_bottom_done_ = true;
+    commit_bottom_cancelled_ = true;
     commit_cv_.notify_one();
 }
 

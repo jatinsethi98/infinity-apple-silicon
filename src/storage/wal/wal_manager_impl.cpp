@@ -12,6 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+module;
+
+// Durability needs a file descriptor, which std::ofstream does not expose.
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
+
 module infinity_core:wal_manager.impl;
 
 import :wal_manager;
@@ -83,7 +91,13 @@ void WalManager::Start() {
     if (!ofs_.is_open()) {
         UnrecoverableError(fmt::format("Failed to open wal file: {}", wal_path_));
     }
-    LOG_INFO(fmt::format("Open wal file: {}", wal_path_));
+    OpenSyncFd();
+    // The WAL file may have just been created; make its directory entry durable too.
+    SyncWalDirectory();
+    LOG_INFO(fmt::format("Open wal file: {} (durability: {})", wal_path_, FlushOptionTypeToString(flush_option_)));
+    if (flush_option_ == FlushOptionType::kNoSync) {
+        LOG_WARN("WAL durability is 'no_sync': acknowledged commits are NOT durable against machine failure.");
+    }
 
     wal_size_ = 0;
     new_flush_thread_ = std::thread([this] { NewFlush(); });
@@ -120,7 +134,13 @@ void WalManager::Stop() {
         UnrecoverableError("WAL manager stop failed: txn manager is nullptr");
     }
 
-    ofs_.close();
+    // Sync before closing on the way down as well, so a clean shutdown never leaves
+    // acknowledged transactions unflushed.
+    if (ofs_.is_open()) {
+        SyncWal();
+        ofs_.close();
+    }
+    CloseSyncFd();
     LOG_INFO("WAL manager is stopped.");
 }
 
@@ -326,20 +346,13 @@ void WalManager::NewFlush() {
             break;
         }
 
-        switch (flush_option_) {
-            case FlushOptionType::kFlushAtOnce: {
-                ofs_.flush();
-                break;
-            }
-            case FlushOptionType::kOnlyWrite: {
-                ofs_.flush(); // FIXME: not flush, only write
-                break;
-            }
-            case FlushOptionType::kFlushPerSecond: {
-                ofs_.flush(); // FIXME: not flush, flush per second
-                break;
-            }
-        }
+        // One sync per batch, which is group commit: the cost of a sync is amortised
+        // across every transaction dequeued together, so N concurrent commits pay for one
+        // sync rather than N. This sits before the bottom_executor_->Submit loop below,
+        // and Submit is what eventually lets NewTxn::Commit return to the client, so the
+        // sync is a barrier ahead of acknowledgement rather than something that merely
+        // happens eventually.
+        SyncWal();
 
         if (InfinityContext::instance().GetServerRole() == NodeRole::kLeader) {
             cluster_manager->SyncLogs();
@@ -435,7 +448,11 @@ void WalManager::FlushLogByReplication(const std::vector<std::string> &synced_lo
     for (const std::string &synced_log : synced_logs) {
         ofs_.write(synced_log.c_str(), synced_log.size());
     }
-    ofs_.flush();
+    // Sync, not just flush. The peer RPC returns success to the leader after this, so
+    // without a sync "replicated" would only mean "reached the follower's page cache" and
+    // a follower crash would silently lose logs the leader believes are safe. Uses the
+    // configured durability level, so it is consistent with local commits.
+    SyncWal();
 }
 
 bool WalManager::SetCheckpointing() {
@@ -502,15 +519,127 @@ i64 WalManager::GetLastCkpWalSize() {
  * @param max_commit_ts The max commit timestamp of the transactions in the
  * current wal file.
  */
+void WalManager::OpenSyncFd() {
+    CloseSyncFd();
+    // O_WRONLY | O_APPEND to match how ofs_ is opened. This descriptor is never written
+    // through; it exists so the file can be fsync'd.
+    sync_fd_ = open(wal_path_.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (sync_fd_ < 0) {
+        UnrecoverableError(fmt::format("Failed to open WAL file for sync: {}, {}", wal_path_, strerror(errno)));
+    }
+}
+
+void WalManager::CloseSyncFd() {
+    if (sync_fd_ >= 0) {
+        close(sync_fd_);
+        sync_fd_ = -1;
+    }
+}
+
+void WalManager::SyncWalDirectory() {
+    // A file sync says nothing about the directory entry that names it, so a power loss
+    // after creating or renaming a WAL file can lose the file itself even though its
+    // contents were durable. Only meaningful for the levels that sync at all.
+    if (flush_option_ == FlushOptionType::kNoSync) {
+        return;
+    }
+    // Failures here are fatal, not warnings. This runs before transactions whose bytes
+    // live in the affected file are acknowledged, and if the directory entry is not
+    // durable then a crash can lose the whole WAL file while those transactions have
+    // already been reported as committed. Warning and continuing would leave the
+    // durability guarantee silently untrue.
+    int dir_fd = open(wal_dir_.c_str(), O_RDONLY);
+    if (dir_fd < 0) {
+        UnrecoverableError(fmt::format("Could not open WAL directory {} to sync it: {}", wal_dir_, strerror(errno)));
+    }
+    int rc = fsync(dir_fd);
+    int saved_errno = errno;
+    close(dir_fd);
+    if (rc != 0) {
+        UnrecoverableError(fmt::format("Failed to sync WAL directory {}: {}", wal_dir_, strerror(saved_errno)));
+    }
+}
+
+void WalManager::SyncWal() {
+    // Always move the stream buffer into the page cache first: fsync only writes back
+    // what the kernel already has.
+    ofs_.flush();
+    if (!ofs_.good()) {
+        UnrecoverableError(fmt::format("Failed writing WAL file: {}", wal_path_));
+    }
+
+    if (flush_option_ == FlushOptionType::kNoSync) {
+        // Explicitly not durable. Bytes are in the page cache, so they survive the
+        // process dying but not the machine dying.
+        return;
+    }
+
+    if (sync_fd_ < 0) {
+        UnrecoverableError("WAL sync requested with no open descriptor");
+    }
+
+    int rc = 0;
+    switch (flush_option_) {
+        case FlushOptionType::kFullFsync: {
+            // F_FULLFSYNC, not fsync: on Darwin fsync returns once the data reaches the
+            // drive, without waiting for the drive to flush its own write cache, so it
+            // does not survive power loss. F_FULLFSYNC does. Measured on this class of
+            // machine: fsync ~28us, F_FULLFSYNC ~2.3ms.
+            do {
+                rc = fcntl(sync_fd_, F_FULLFSYNC);
+            } while (rc != 0 && errno == EINTR);
+            if (rc != 0 && (errno == ENOTSUP || errno == EOPNOTSUPP || errno == EINVAL)) {
+                // Only these mean "this filesystem cannot do it" -- some network and
+                // virtualised filesystems do not implement F_FULLFSYNC. Everything else
+                // (EIO, EBADF, ENOSPC...) is a real failure, and downgrading to fsync
+                // there would acknowledge a commit after a genuine sync error.
+                LOG_WARN(fmt::format("F_FULLFSYNC unsupported on the WAL filesystem ({}); falling back to fsync. "
+                                     "Commits are no longer durable against power loss.",
+                                     strerror(errno)));
+                do {
+                    rc = fsync(sync_fd_);
+                } while (rc != 0 && errno == EINTR);
+            }
+            break;
+        }
+        case FlushOptionType::kFsync: {
+            do {
+                rc = fsync(sync_fd_);
+            } while (rc != 0 && errno == EINTR);
+            break;
+        }
+        case FlushOptionType::kNoSync: {
+            break;
+        }
+    }
+
+    if (rc != 0) {
+        // A failed sync must never be followed by acknowledging the transaction.
+        UnrecoverableError(fmt::format("Failed to sync WAL file {}: {}", wal_path_, strerror(errno)));
+    }
+    sync_count_.fetch_add(1, std::memory_order_relaxed);
+}
+
 void WalManager::SwapWalFile(const TxnTimeStamp max_commit_ts, bool error_if_duplicate) {
     if (max_commit_ts <= last_swap_wal_ts_) {
         LOG_WARN(fmt::format("Skip swap wal file, max_commit_ts: {} <= last_swap_wal_ts_: {}", max_commit_ts, last_swap_wal_ts_));
         return;
     }
 
+    // Sync BEFORE closing. This is called from inside the flush loop's per-transaction
+    // pass, so earlier transactions in the same batch have already been written to THIS
+    // file, and the batch's single sync at the end of the loop would land on the new file
+    // instead. Without this, those transactions get acknowledged with their bytes still
+    // only in the page cache of a file nobody will sync again.
+    //
+    // The invariant is: every file that received bytes for transactions in this batch is
+    // synced before any of those transactions is acknowledged -- not "sync the current
+    // file once per batch".
     if (ofs_.is_open()) {
+        SyncWal();
         ofs_.close();
     }
+    CloseSyncFd();
 
     std::string new_file_path = fmt::format("{}/{}", wal_dir_, WalFile::WalFilename(max_commit_ts));
     LOG_INFO(fmt::format("Wal {} swap to new path: {}, error_if_duplicate: {}", wal_path_, new_file_path, error_if_duplicate));
@@ -538,6 +667,10 @@ void WalManager::SwapWalFile(const TxnTimeStamp max_commit_ts, bool error_if_dup
     if (!ofs_.is_open()) {
         UnrecoverableError(fmt::format("Failed to open wal file: {}", wal_path_));
     }
+    OpenSyncFd();
+    // The rename above and the create just now are both directory operations; make them
+    // durable so a power loss cannot leave the WAL unnamed.
+    SyncWalDirectory();
 
     last_swap_wal_ts_ = max_commit_ts;
     LOG_INFO(fmt::format("Open new wal file {}", wal_path_));

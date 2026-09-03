@@ -28,7 +28,8 @@
 #                     against surviving state (see do_start).
 #   --foreground      run in the foreground instead of detaching
 #   --binary PATH     server binary (default: build/macos-arm64-release/src/infinity)
-#   --wal-flush MODE  only_write | flush_at_once | flush_per_second (default flush_at_once)
+#   --wal-flush MODE  WAL durability: full_fsync (default, power-loss safe, ~2.3ms/sync)
+#                     | fsync (OS-crash safe, ~28us) | no_sync (~1.5us, unsafe)
 #
 set -euo pipefail
 
@@ -41,11 +42,10 @@ port_offset=0
 fresh=0
 foreground=0
 binary="build/macos-arm64-release/src/infinity"
-# flush_at_once rather than the shipped only_write default: a development instance
-# should push each commit out of the process buffer promptly so a kill -9 recovery
-# test measures the engine rather than an arbitrary amount of unflushed buffer.
-# Note this is NOT power-loss durability -- see docs/apple_silicon/PLAN_SHIPPABLE.md.
-wal_flush=flush_at_once
+# full_fsync matches the shipped default, so a development instance exercises the same
+# durability path users get. Override with --wal-flush no_sync when benchmarking, where
+# a ~2.3 ms device flush per commit batch would dominate the measurement.
+wal_flush=full_fsync
 
 while (( $# )); do
     case "$1" in

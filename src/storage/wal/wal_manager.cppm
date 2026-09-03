@@ -87,6 +87,25 @@ public:
 
     void SwapWalFile(TxnTimeStamp max_commit_ts, bool error_if_duplicate);
 
+    // Flush ofs_ and, per the configured durability level, push the WAL to the device.
+    // Must be called before any transaction whose bytes are in this file is acknowledged,
+    // and before the file is closed or swapped away.
+    void SyncWal();
+
+    // Open / close sync_fd_ alongside ofs_ for the current wal_path_.
+    void OpenSyncFd();
+    void CloseSyncFd();
+
+    // fsync the WAL directory itself. Syncing a file does not make its directory entry
+    // durable, so without this a power loss can lose a freshly created or freshly renamed
+    // WAL file even though its data was synced.
+    void SyncWalDirectory();
+
+    // Number of completed WAL syncs. For tests: durability at the acknowledgement point
+    // is asserted by observing that a sync happened, not by killing the process, which
+    // the page cache makes indistinguishable.
+    u64 SyncCount() const { return sync_count_.load(std::memory_order_relaxed); }
+
     std::string GetWalFilename() const;
 
     std::tuple<TransactionID, TxnTimeStamp, TxnTimeStamp> GetReplayEntries(StorageMode targe_storage_mode,
@@ -133,7 +152,17 @@ private:
 
     // Only Flush thread access following members
     std::ofstream ofs_{};
-    FlushOptionType flush_option_{FlushOptionType::kOnlyWrite};
+    // A second descriptor on the SAME file as ofs_, used only to sync it. ofs_.flush()
+    // moves bytes from the stream buffer into the page cache; only fsync/F_FULLFSYNC on a
+    // descriptor gets them onto the device, and std::ofstream exposes no descriptor.
+    // fsync acts on the file, not on the descriptor that wrote it, so syncing through a
+    // separate fd for the same path is correct as long as ofs_ has been flushed first.
+    // -1 when no WAL file is open.
+    int sync_fd_{-1};
+    FlushOptionType flush_option_{FlushOptionType::kNoSync};
+    // Counts completed WAL syncs. Durability cannot be proven by killing the process --
+    // the page cache serves the bytes back either way -- so tests assert on this instead.
+    std::atomic<u64> sync_count_{0};
     std::unique_ptr<BottomExecutor> bottom_executor_{nullptr};
 
     // Flush and Checkpoint threads access following members

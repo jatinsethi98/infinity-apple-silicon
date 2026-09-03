@@ -58,10 +58,24 @@ wal_dir                       = "/var/infinity/wal"
 checkpoint_interval      = "86400s"
 wal_compact_threshold         = "1GB"
 
-# flush_at_once: write and flush log each commit
-# only_write: write log, OS control when to flush the log, default
-# flush_per_second: logs are written after each commit and flushed to disk per second.
-wal_flush                     = "only_write"
+# WAL durability level. One sync is performed per batch of committed transactions, so
+# under concurrent load the cost is amortised; a single serial client pays it per commit.
+# Measured per sync on an Apple internal SSD:
+#
+#   full_fsync  fsync + F_FULLFSYNC. Survives power loss. ~2.3 ms.
+#               On macOS plain fsync returns before the drive flushes its own write cache,
+#               so F_FULLFSYNC is what actually makes a commit durable.
+#   fsync       fsync only. Survives an OS crash, NOT power loss. ~28 us.
+#   no_sync     No sync. Survives the process dying, not the machine. ~1.5 us.
+#               For benchmarks and throwaway data only.
+#
+# Default is full_fsync: this WAL is the engine's only durability mechanism (RocksDB's own
+# WAL is disabled), so a weaker level means an acknowledged commit can disappear.
+#
+# The legacy names flush_at_once / flush_per_second / only_write are still accepted and map
+# to full_fsync / fsync / no_sync respectively. Note that previously ALL THREE behaved
+# identically and none of them synced at all.
+wal_flush                     = "full_fsync"
 
 [resource]
 resource_dir                  = "/usr/share/infinity/resource"
