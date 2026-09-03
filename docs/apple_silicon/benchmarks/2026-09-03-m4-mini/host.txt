@@ -1,0 +1,13 @@
+Model: Mac16,10
+Chip: Apple M4, perf cores 4, eff cores 6
+Memory: 16 GB
+Cache line: 128 bytes
+ProductName:		macOS
+ProductVersion:		26.3.1
+ProductVersionExtra:	(a)
+BuildVersion:		25D771280a
+Compiler: Homebrew clang version 20.1.8
+CMake: cmake version 4.4.3
+FAISS: 1.15.0 from source, BLA_VENDOR=Apple (Accelerate), Metal backend off, libomp 23.1.0
+Homebrew faiss bottle: 1.15.0 (OpenBLAS)
+Fork commit: 02a573a1a

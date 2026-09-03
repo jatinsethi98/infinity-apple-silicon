@@ -1,14 +1,16 @@
 # Infinity on Apple Silicon
 
-Native `arm64-apple-darwin` build of Infinity. No Docker, no Rosetta.
+Native `arm64-apple-darwin` build of Infinity. No Docker, no Rosetta. This page is the engineering
+guide: how to build, what differs from the Linux build, and why. Results are in
+[BENCHMARKS.md](BENCHMARKS.md), the plan in [ROADMAP.md](ROADMAP.md).
 
 ## Status
 
 | Area | State |
 |---|---|
 | Native arm64 compile + link | Working (engine, unit tests, HNSW benchmark harness) |
-| Native server lifecycle | Create / insert / flush / HNSW build / indexed query / restart + reload verified |
-| HNSW index-build benchmark vs FAISS | See [BASELINE.md](BASELINE.md) |
+| Native server lifecycle | Create / insert / flush / HNSW build / indexed query / restart + reload verified (M3 Pro, 2026-08) |
+| HNSW index build and query vs FAISS | Measured: 1.40× build at matched recall and 1.30× QPS on M4; 1.52× build on M3 Pro. See [BENCHMARKS.md](BENCHMARKS.md) |
 | Full-text, update/delete/drop, bulk import, crash recovery | Not yet verified natively |
 | Linux x86-64 / ARM64 preservation | Not yet re-verified after the port |
 | Packaging / macOS CI | Not started |
@@ -16,52 +18,75 @@ Native `arm64-apple-darwin` build of Infinity. No Docker, no Rosetta.
 ## Prerequisites
 
 ```sh
-brew install llvm@20 cmake ninja libomp faiss
-```
-
-Everything is pinned to Homebrew LLVM 20 (`/opt/homebrew/opt/llvm@20`). Apple Clang is not used —
-the project needs C++23 modules support that matches the vcpkg-built dependencies.
-
-`SDKROOT` must be set, or Homebrew Clang will not find the platform headers and configure fails with
-`'pthread.h' file not found`:
-
-```sh
+brew install llvm@20 cmake ninja libomp faiss simde
 export SDKROOT=$(xcrun --show-sdk-path)
 ```
 
-For the full server build you also need a bootstrapped vcpkg whose history contains the baseline
-commit pinned in `vcpkg.json`:
+Everything is pinned to Homebrew LLVM 20 (`/opt/homebrew/opt/llvm@20`). Apple Clang is not used:
+the project needs C++23 modules support that matches the vcpkg-built dependencies. `SDKROOT` must
+be set or Homebrew Clang will not find the platform headers and configure fails with
+`'pthread.h' file not found`. CMake 4.0.3 or newer is required by the harness (it uses the
+experimental `import std` support keyed to the CMake version); Homebrew's current CMake works.
+
+## Building the benchmark harness (minutes, no vcpkg)
+
+The harness is a standalone CMake project under `tools/apple_silicon/native_hnsw_smoke`. It
+compiles Infinity's production `hnsw_alg.cppm`, `hnsw_simd_func.cppm` and the data-store modules
+directly, links Homebrew FAISS, and needs only one header from vcpkg: the patched `ctpl_stl.h`
+thread pool. A script fetches and patches it into the path the preset expects:
+
+```sh
+scripts/apple_silicon/bootstrap_ctpl.sh          # -> vcpkg_installed/arm64-osx/include/ctpl_stl.h
+cmake --preset bench -S tools/apple_silicon/native_hnsw_smoke
+cmake --build build/bench --target infinity_hnsw_d0 faiss_hnsw_d0
+```
+
+Note the build step is `cmake --build build/bench`, not `cmake --build --preset bench` (build
+presets do not accept `-S`). The binaries land in `build/bench/`.
+
+### The fair FAISS reference
+
+The Homebrew `faiss` bottle links OpenBLAS and builds the same HNSW graph about 1.5× slower than
+FAISS linked against Apple's Accelerate framework, so comparing against it inflates Infinity's
+result. Build the reference from source (about a minute on an M4) and relink the harness:
+
+```sh
+scripts/apple_silicon/build_faiss_accelerate.sh   # -> build/bench-faiss-src/faiss_hnsw_d0
+```
+
+FAISS 1.15 enables a Metal GPU backend by default on Apple Silicon, which needs the Xcode Metal
+toolchain; the script turns it off because the comparison is CPU HNSW.
+
+## Building the full server (about an hour, needs vcpkg)
 
 ```sh
 git clone https://github.com/microsoft/vcpkg.git
 cd vcpkg && ./bootstrap-vcpkg.sh -disableMetrics
 export VCPKG_ROOT=$PWD
-```
+cd -
 
-A shallow clone is not enough — vcpkg must be able to `git show <baseline>:versions/baseline.json`.
-
-## Building
-
-Presets live in `CMakePresets.json` (server) and
-`tools/apple_silicon/native_hnsw_smoke/CMakePresets.json` (benchmark harness).
-
-```sh
-# Full server, Release
-cmake --preset macos-arm64-release
+cmake --preset macos-arm64-release          # full server, Release
 cmake --build --preset macos-arm64-release
 
-# Unit tests
-cmake --preset macos-arm64-debug
+cmake --preset macos-arm64-debug            # unit tests
 cmake --build --preset macos-arm64-test     # builds test_main
-
-# HNSW benchmark harness only (fast: no server, no vcpkg toolchain needed)
-cmake --preset bench -S tools/apple_silicon/native_hnsw_smoke
-cmake --build --preset bench -S tools/apple_silicon/native_hnsw_smoke
 ```
 
-The benchmark harness is a standalone CMake project. It compiles Infinity's `hnsw_alg.cppm` and
-`hnsw_simd_func.cppm` directly and links Homebrew FAISS, so it builds in minutes rather than the
-hour a full engine build takes. That makes it the right target for optimization iteration.
+A shallow vcpkg clone is not enough: vcpkg must be able to
+`git show <baseline>:versions/baseline.json` for the baseline commit pinned in `vcpkg.json`.
+Presets live in `CMakePresets.json`. The server build was last verified on the M3 Pro in
+August 2026 and has not been re-run on the M4 as of the September 2026 benchmarks.
+
+## Benchmarking
+
+See [`scripts/bench/README.md`](../../scripts/bench/README.md) for the driver and the fairness
+rules, [BENCHMARKS.md](BENCHMARKS.md) for published results and reproduction commands, and
+[BASELINE.md](BASELINE.md) for the optimization campaign's lab notebook.
+
+```sh
+python3 scripts/bench/fetch_datasets.py sift1m --spot-check   # -> ./datasets/sift1m
+python3 scripts/bench/run_baseline.py --help
+```
 
 ## Platform boundaries
 
@@ -85,16 +110,6 @@ Where the port diverges from Linux, and why:
 - **Dependencies.** `boost` is split into the components actually used rather than the monolithic
   port. `ports/roaring` and `ports/vit-vit-ctpl` are overlay ports; the latter carries a
   strong-push-guarantee patch that the parallel HNSW build path depends on.
-
-## Benchmarking
-
-See [`scripts/bench/README.md`](../../scripts/bench/README.md) for the harness and the fairness
-rules, and [BASELINE.md](BASELINE.md) for measured results.
-
-```sh
-python3 scripts/bench/fetch_datasets.py sift1m --spot-check
-python3 scripts/bench/run_baseline.py --help
-```
 
 ## Known HNSW convention difference vs FAISS
 

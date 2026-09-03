@@ -6,20 +6,24 @@ optimization experiment. It is one file; read it before you trust it.
 
 ## Run it
 
+Datasets: `python3 scripts/bench/fetch_datasets.py sift1m` downloads and converts SIFT1M into
+`./datasets/sift1m/`. Python-library comparisons on the same data: `bench_python_libs.py`.
+
 ```bash
 python3 scripts/bench/run_baseline.py \
-  --dataset /tmp/d0test/d0-f32le-n12288-d128-seed0.bin \
+  --dataset datasets/synth/d0-f32le-n12288-d128-seed0.bin \
   --n 12288 --d 128 --m 32 --efc 200 --ef 32,64,128 \
   --participants 12 --pairs 3 --query-count 256 --timeout 600 \
-  --infinity-bin /path/to/infinity_hnsw_d0 \
-  --faiss-bin    /path/to/faiss_hnsw_d0
+  --infinity-bin build/bench/infinity_hnsw_d0 \
+  --faiss-bin    build/bench-faiss-src/faiss_hnsw_d0
 ```
 
 Both binaries take identical argv
 (`DATASET N D M EFC EFSEARCH CHUNK QUERYCOUNT PARTICIPANTS BUILDGRAIN AUDIT_SIDECAR`)
 and print `key=value` lines on stdout (keys prefixed `infinity_`/`faiss_`). The driver
-parses those; it does not need the whole server built. Prebuilt smoke binaries live at
-`.../native-smoke-v1/build/native-hnsw-d0-release/{infinity,faiss}_hnsw_d0`.
+parses those; it does not need the whole server built. Build the binaries with the `bench`
+preset (see `docs/apple_silicon/README.md`); use `build/bench-faiss-src/faiss_hnsw_d0` from
+`scripts/apple_silicon/build_faiss_accelerate.sh` as the FAISS arm, never the Homebrew-linked one.
 
 Output goes to `scripts/bench/results/<UTC-timestamp>/`:
 - `raw-<engine>-p<pair>-<order>.txt` — the exact argv + full stdout/stderr of each run.
@@ -76,7 +80,7 @@ contamination-robust cross-check. Keep a change only when the interval excludes 
 
 ```bash
 python3 scripts/bench/ab_build.py \
-  --dataset /Users/sethjatq/Desktop/proj/datasets/sift1m/base.f32 \
+  --dataset datasets/sift1m/base.f32 \
   --n 1000000 --d 128 --m 32 --efc 200 --participants 12 \
   --blocks 15 --require-ac --label my-change \
   --control-bin  build/bench/infinity_hnsw_d0.control \
@@ -90,16 +94,19 @@ needs defending, add blocks.
 
 ## Known limitations (read before quoting a number)
 
-- **Build timing source.** These prebuilt (Aug-21) binaries emit `*_cold_build_ns`
-  directly on stdout, so timing is the engine's own measured build time. Newer runner
-  source (Aug-27) gates that block behind a 17-arg "campaign" protocol; if you rebuild
-  and the driver can't find `*_cold_build_ns`, it falls back to **wall-clock of the
-  subprocess** (which includes dataset load, recall audit, and query benchmark, so it is
-  an overestimate) and sets `build_timing_used_wall_clock_fallback=true` in results.json
-  plus a Notes line. Treat fallback numbers as directional only.
+- **Build timing source.** Current binaries emit `*_cold_build_ns` directly on stdout, so
+  timing is the engine's own measured build time. If the driver cannot find that key it
+  falls back to **wall-clock of the subprocess** (which includes dataset load, recall audit,
+  and query benchmark, so it is an overestimate) and sets
+  `build_timing_used_wall_clock_fallback=true` in results.json plus a Notes line. Treat
+  fallback numbers as directional only.
 - **recall@10 is deterministic** (fixed seed) and independent of the timing run; the
   engine emits recall for fixed efSearch points {32,64,128,256,512} in a single run, so
   `--ef` only *selects* which of those to report — values outside that set come back n/a.
+  The driver's parity gate uses the 64-query synthetic self-audit. For any published parity
+  claim set `HNSW_D0_EXTERNAL_QUERIES` / `HNSW_D0_EXTERNAL_GROUNDTRUTH` (n=1M only) and read
+  the `*_external_recall_at_10_ef_*` keys from the raw output instead; see
+  `docs/apple_silicon/BENCHMARKS.md`.
 - **`--participants` sets the engine argv thread count**; the driver runs engines
   sequentially (never concurrently) so they don't contend.
 - **Host noise is not eliminated, only exposed.** On battery or under competing load

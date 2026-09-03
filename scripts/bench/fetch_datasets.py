@@ -57,7 +57,7 @@ except Exception:  # pragma: no cover - environment dependent
     np = None
     HAVE_NUMPY = False
 
-DEFAULT_ROOT = "/Users/sethjatq/Desktop/proj/datasets"
+DEFAULT_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "datasets")  # <repo>/datasets
 
 # Each dataset: ordered list of tarball mirrors to try, plus the .fvecs/.ivecs
 # member names inside the archive and the expected geometry (n, d, nq, k).

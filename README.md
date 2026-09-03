@@ -1,143 +1,137 @@
-<div align="center">
-  <img width="187" src="https://github.com/infiniflow/infinity/assets/7248/015e1f02-1f7f-4b09-a0c2-9d261cd4858b" alt="Infinity logo"/>
-</div>
+# Infinity for Apple Silicon
 
+Native `arm64-apple-darwin` build of [Infinity](https://github.com/infiniflow/infinity), the
+open-source hybrid-search database behind [RAGFlow](https://github.com/infiniflow/ragflow), with
+an HNSW index build tuned for Apple's memory system.
 
-<p align="center">
-    <b>The AI-native database built for LLM applications, providing incredibly fast hybrid search of dense embedding, sparse embedding, tensor and full-text</b>
-</p>
+**No Docker. No Rosetta. Faster than FAISS on the same Mac.**
 
-<h4 align="center">
-  <a href="https://infiniflow.org/docs/dev/category/get-started">Document</a> |
-  <a href="https://infiniflow.org/docs/dev/benchmark">Benchmark</a> |
-  <a href="https://twitter.com/infiniflowai">Twitter</a> |
-  <a href="https://discord.gg/jEfRUwEYEV">Discord</a>
-</h4>
+| | |
+|---|---|
+| Upstream version | Infinity 0.7.3 (Apache-2.0, © InfiniFlow) |
+| Platform | macOS 14+ on Apple Silicon; measured on M3 Pro and M4 |
+| Status | Engine core and HNSW benchmark harness working natively; full database port in progress (see [Status](#status)) |
 
+## Why this exists
 
-Infinity is a cutting-edge AI-native database that provides a wide range of search capabilities for rich data types such as dense vector, sparse vector, tensor, full-text, and structured data. It provides robust support for various LLM applications, including search, recommenders, question-answering, conversational AI, copilot, content generation, and many more **RAG** (Retrieval-augmented Generation) applications.
+Upstream Infinity requires an x86-64 CPU with AVX2 and ships only as a Linux Docker image, so
+it has never run on a Mac. RAGFlow, which uses Infinity as one of its document engines, tells
+Apple Silicon users to build their own images and lists Infinity on ARM64 as unsupported.
 
-- [Key Features](#-key-features)
-- [Get Started](#-get-started)
-- [Document](#-document)
-- [Roadmap](#-roadmap)
-- [Community](#-community)
+This repository is a port of the Infinity engine to Apple Silicon plus a set of measured
+optimizations to its HNSW index build: whole-vector prefetch, prefetch that skips already-visited
+candidates, a 128-byte prefetch stride matching the M-series cache line, a four-accumulator L2
+kernel and a one-query-against-four-candidates batch kernel, all dispatched at runtime. Every
+optimization was accepted only after a paired A/B campaign showed a statistically significant
+end-to-end improvement at matched recall.
 
-## ⚡️ Performance
+## Benchmarks
 
-<div class="column" align="middle">
-  <img src="https://github.com/user-attachments/assets/c4c98e23-62ac-4d1a-82e5-614bca96fe0a" alt="Infinity performance comparison"/>
-</div>
+SIFT1M (1,000,000 × 128-d), HNSW M=32, efConstruction=200, 10 build threads, k=10, efSearch=256,
+recall@10 scored against the official SIFT1M ground truth. Mac mini with Apple M4 (4P+6E), 16 GB,
+2026-09-03. Full method, raw output and reproduction commands in
+[docs/apple_silicon/BENCHMARKS.md](docs/apple_silicon/BENCHMARKS.md).
 
-## 🌟 Key Features
+| engine | index build | vectors/s | QPS (12 threads) | p50 latency | recall@10 |
+|---|---:|---:|---:|---:|---:|
+| **Infinity, this repo** | **35.3 s** | **28,300** | **24,700** | **209 µs** | 0.9993 |
+| FAISS 1.15, Accelerate BLAS, from source | 58.1 s | 17,200 | 19,000 | 237 µs | 0.9994 |
+| FAISS 1.15, `faiss-cpu` pip wheel (Python) | 60.3 s | 16,600 | 12,400 | 467 µs | 0.9989 |
+| hnswlib 0.8 (Python) | 86.3 s | 11,600 | 8,600 | 644 µs | 0.9984 |
+| usearch 2.26, NEON (Python) | 112.9 s | 8,900 | 6,100 | 1,019 µs | 0.9986 |
 
-Infinity comes with high performance, flexibility, ease-of-use, and many features designed to address the challenges facing the next-generation AI applications:
+- **1.65× faster index build than FAISS at equal parameters, 1.30× higher query throughput**
+  (median of two alternating paired runs, Accelerate-linked FAISS built from source).
+- **1.40× faster at matched recall.** Raising Infinity to efConstruction=235 puts its recall at or
+  above FAISS at every efSearch and builds in 41.4 s.
+- On a MacBook Pro with M3 Pro the matched-recall speedup measured **1.52×** (95% CI 1.51–1.53)
+  over a six-block randomized campaign.
+- Embedding-sized vectors on the M4: 5,000 vectors/s build and 5,000 QPS at 768-d, 3,100 vectors/s
+  and 3,200 QPS at 1536-d (clustered synthetic data).
 
-### 🚀 Incredibly fast
+We could not find published build-time or QPS numbers for any of these engines measured on Apple
+Silicon; these appear to be the first. Every number here comes from scripts in this repository and
+can be re-run in about fifteen minutes.
 
-- Achieves 0.1 milliseconds query latency and 15K+ QPS on million-scale vector datasets.
-- Achieves 1 millisecond latency and 12K+ QPS in full-text search on 33M documents.
+## Status
 
-> See the [Benchmark report](https://infiniflow.org/docs/dev/benchmark) for more information.
+| Area | State |
+|---|---|
+| Native arm64 compile and link of the engine, unit tests and HNSW harness | Working |
+| Native server lifecycle: create, insert, flush, HNSW build, indexed query, restart and reload | Verified (M3 Pro, 2026-08) |
+| HNSW index build and query performance vs FAISS | Measured, see above |
+| Full-text search, update and delete, bulk import, crash recovery on macOS | Not yet verified natively |
+| Linux x86-64 and Linux ARM64 behaviour after the port | Not yet re-verified |
+| Packaging, installer, Homebrew formula, macOS CI | Not started |
 
-### 🔮 Powerful search
+Read this as: a fast engine core and a working port, not yet a shippable database. The plan to
+close the gap is in [docs/apple_silicon/ROADMAP.md](docs/apple_silicon/ROADMAP.md).
 
-- Supports a hybrid search of dense embedding, sparse embedding, tensor, and full text, in addition to filtering.
-- Supports several types of rerankers including RRF, weighted sum and **ColBERT**.
+## Quick start: build and run the benchmark (about 15 minutes)
 
-### 🍔 Rich data types
+The benchmark harness compiles Infinity's production HNSW code directly and needs no vcpkg and
+no server build.
 
-Supports a wide range of data types including strings, numerics, vectors, and more.
+```sh
+brew install llvm@20 cmake ninja libomp faiss simde
+export SDKROOT=$(xcrun --show-sdk-path)
 
-### 🎁 Ease-of-use
+scripts/apple_silicon/bootstrap_ctpl.sh                       # patched thread-pool header, no vcpkg needed
+cmake --preset bench -S tools/apple_silicon/native_hnsw_smoke
+cmake --build build/bench --target infinity_hnsw_d0 faiss_hnsw_d0
 
-- Intuitive Python API. See the [Python API](https://infiniflow.org/docs/dev/pysdk_api_reference)
-- A single-binary architecture with no dependencies, making deployment a breeze.
-- Embedded in Python as a module and friendly to AI developers.  
+python3 scripts/bench/fetch_datasets.py sift1m                # 168 MB download into ./datasets
+export HNSW_D0_EXTERNAL_QUERIES=$PWD/datasets/sift1m/query.f32
+export HNSW_D0_EXTERNAL_GROUNDTRUTH=$PWD/datasets/sift1m/groundtruth.i32
 
-## 🎮 Get Started
-
-This section provides guidance on deploying the Infinity database using Docker, with the client and server as separate processes. 
-
-### Prerequisites
-
-- CPU: x86_64 with AVX2 support.
-- OS:
-  - Linux with glibc 2.17+.
-  - Windows 10+ with WSL/WSL2.
-  - MacOS
-- Python: Python 3.11+.
-
-
-### Install Infinity server
-
-#### Linux x86_64 & MacOS x86_64
-
-```bash
-sudo mkdir -p /var/infinity && sudo chown -R $USER /var/infinity
-docker pull infiniflow/infinity:nightly
-docker run -d --name infinity -v /var/infinity/:/var/infinity --ulimit nofile=500000:500000 --network=host infiniflow/infinity:nightly
-```
-#### Windows
-
-If you are on Windows 10+, you must enable WSL or WSL2 to deploy Infinity using Docker. Suppose you've installed Ubuntu in WSL2:
-
-1. Follow [this](https://learn.microsoft.com/en-us/windows/wsl/systemd) to enable systemd inside WSL2.
-2. Install docker-ce according to the [instructions here](https://docs.docker.com/engine/install/ubuntu).
-3. If you have installed Docker Desktop version 4.29+ for Windows: **Settings** **>** **Features in development**, then select **Enable host networking**.
-4. Pull the Docker image and start Infinity: 
-
-   ```bash
-   sudo mkdir -p /var/infinity && sudo chown -R $USER /var/infinity
-   docker pull infiniflow/infinity:nightly
-   docker run -d --name infinity -v /var/infinity/:/var/infinity --ulimit nofile=500000:500000 --network=host infiniflow/infinity:nightly
-   ```
-
-### Install Infinity client
-
-```
-pip install infinity-sdk==0.7.3
+python3 scripts/bench/run_baseline.py \
+  --dataset datasets/sift1m/base.f32 --n 1000000 --d 128 --m 32 --efc 200 \
+  --ef 32,64,128,256 --participants $(sysctl -n hw.ncpu) --pairs 2 \
+  --infinity-bin build/bench/infinity_hnsw_d0 --faiss-bin build/bench/faiss_hnsw_d0
 ```
 
-### Run a vector search
+The Homebrew FAISS bottle links OpenBLAS and is about 1.5× slower than FAISS built against
+Apple's Accelerate framework, so it flatters Infinity. For the fair comparison used in the table
+above, build the Accelerate FAISS and point `--faiss-bin` at it:
 
-```python
-import infinity
-
-infinity_obj = infinity.connect(infinity.NetworkAddress("<SERVER_IP_ADDRESS>", 23817)) 
-db_object = infinity_object.get_database("default_db")
-table_object = db_object.create_table("my_table", {"num": {"type": "integer"}, "body": {"type": "varchar"}, "vec": {"type": "vector, 4, float"}})
-table_object.insert([{"num": 1, "body": "unnecessary and harmful", "vec": [1.0, 1.2, 0.8, 0.9]}])
-table_object.insert([{"num": 2, "body": "Office for Harmful Blooms", "vec": [4.0, 4.2, 4.3, 4.5]}])
-res = table_object.output(["*"])
-                  .match_dense("vec", [3.0, 2.8, 2.7, 3.1], "float", "ip", 2)
-                  .to_pl()
-print(res)
+```sh
+scripts/apple_silicon/build_faiss_accelerate.sh               # builds build/bench-faiss-src/faiss_hnsw_d0
 ```
 
-## 🔧 Deploy Infinity using binary
+## Full server build
 
-If you wish to deploy Infinity using binary with the server and client as separate processes, see the [Deploy infinity using binary](https://infiniflow.org/docs/dev/deploy_infinity_server) guide.
+The complete Infinity server builds natively with the `macos-arm64-release` CMake preset. It
+needs a bootstrapped vcpkg checkout and takes about an hour. Instructions, platform notes and
+known differences from the Linux build are in
+[docs/apple_silicon/README.md](docs/apple_silicon/README.md). The server exposes the same
+[Python SDK](https://infiniflow.org/docs/dev/pysdk_api_reference) and
+[HTTP API](https://infiniflow.org/docs/dev/http_api_reference) as upstream.
 
-## 🔧 Build from Source
+## Documentation
 
-See the [Build from Source](https://infiniflow.org/docs/dev/build_from_source) guide.
+| Document | What it covers |
+|---|---|
+| [docs/apple_silicon/README.md](docs/apple_silicon/README.md) | Building on macOS, platform boundaries, SIMD and allocator notes, HNSW convention differences vs FAISS |
+| [docs/apple_silicon/BENCHMARKS.md](docs/apple_silicon/BENCHMARKS.md) | Published results, method, fairness rules, limitations, reproduction |
+| [docs/apple_silicon/COST_COMPARISON.md](docs/apple_silicon/COST_COMPARISON.md) | What serving a RAG index costs on a Mac mini vs AWS vs Pinecone serverless |
+| [docs/apple_silicon/ROADMAP.md](docs/apple_silicon/ROADMAP.md) | What is done, what is next, and the definition of done |
+| [docs/apple_silicon/BASELINE.md](docs/apple_silicon/BASELINE.md) | Lab notebook of the optimization campaign on the M3 Pro, including corrections |
+| [docs/apple_silicon/SEARCHLAYER_DECOMPOSITION.md](docs/apple_silicon/SEARCHLAYER_DECOMPOSITION.md) | Profile of the index-build hot path and the hypotheses it ruled out |
+| [docs/apple_silicon/PRIOR_EFFORT_AUDIT.md](docs/apple_silicon/PRIOR_EFFORT_AUDIT.md) | Audit of the first porting attempt and what it actually proved |
+| [scripts/bench/README.md](scripts/bench/README.md) | The benchmark driver, the fairness contract, and how to A/B a change |
+| [tools/apple_silicon/native_hnsw_smoke/README.md](tools/apple_silicon/native_hnsw_smoke/README.md) | The standalone harness that compiles the production HNSW code |
+| [docs/apple_silicon/benchmarks/](docs/apple_silicon/benchmarks/) | Raw output of every published run |
 
-## 📚 Document
+## Relationship to upstream
 
-- [Quickstart](https://infiniflow.org/docs/dev/)
-- [Python API](https://infiniflow.org/docs/dev/pysdk_api_reference)
-- [HTTP API](https://infiniflow.org/docs/dev/http_api_reference)
-- [References](https://infiniflow.org/docs/dev/category/references)
-- [FAQ](https://infiniflow.org/docs/dev/FAQ)
+This is a port of [infiniflow/infinity](https://github.com/infiniflow/infinity) at v0.7.3, not a
+rewrite. Platform-specific code is gated so that one portable codebase can serve Linux and macOS,
+and the intent is to contribute the port upstream as a series of reviewable pull requests. Infinity
+is licensed under Apache-2.0 and is © InfiniFlow; this repository keeps that license.
 
-## 📜 Roadmap
+## Community
 
-See the [Infinity Roadmap 2025](https://github.com/infiniflow/infinity/issues/2393)
-
-## 🙌 Community
-
-- [Discord](https://discord.gg/jEfRUwEYEV)
-- [Twitter](https://twitter.com/infiniflowai)
-- [GitHub Discussions](https://github.com/infiniflow/infinity/discussions)
-
+Issues and pull requests are welcome here. For Infinity itself see the
+[upstream repository](https://github.com/infiniflow/infinity),
+[documentation](https://infiniflow.org/docs/dev/) and
+[Discord](https://discord.gg/jEfRUwEYEV).
