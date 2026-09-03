@@ -761,26 +761,61 @@ BigIntT DataType::StringToValue<BigIntT>(const std::string_view &str) {
     return value;
 }
 
+// True when std::stof/std::stod consumed the whole number, allowing a trailing run of
+// whitespace.
+//
+// Rejecting a partial parse matters: without it "1.2junk" silently becomes 1.2, and
+// these functions parse both imported column values and search options such as
+// bm25_param_k1. But rejecting trailing WHITESPACE would be a new restriction rather
+// than a fix. Neither caller trims: the CSV reader hands over the raw cell
+// (src/executor/operator/physical_import_impl.cpp) and search options are split
+// without trimming (src/parser/search_options.cpp), so "1.5 " reaches here and used
+// to parse successfully on Linux. Tightening that would break working data.
+//
+// Leading whitespace is already accepted by strtof itself, so tolerating it at the end
+// also keeps the two ends consistent.
+static bool ConsumedWholeNumber(const std::string &text, size_t consumed) {
+    for (size_t i = consumed; i < text.size(); ++i) {
+        if (std::isspace(static_cast<unsigned char>(text[i])) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[noreturn]] static void ReportNumericParseError(const char *type_name, const std::string_view &str, double value) {
+    std::string error_msg = fmt::format("Error: parse {}: {} to {}", type_name, str, value);
+    std::cerr << error_msg << std::endl;
+    ParserError(error_msg);
+    // ParserError throws; this is unreachable and only present so the compiler can see
+    // that every caller's control flow ends here.
+    throw ParserException(error_msg);
+}
+
 template <>
 FloatT DataType::StringToValue<FloatT>(const std::string_view &str) {
     if (str.empty()) {
         return FloatT{};
     }
     FloatT value{};
-#if defined(__APPLE__)
-    auto ret = std::sscanf(str.data(), "%a", &value);
-    ParserAssert((size_t)ret == str.size(), "Error: parse float error");
-#else
-    // Used in libc++
+    // std::stof rather than std::from_chars: libc++'s floating-point from_chars does
+    // not accept the "0x" hex form, which float_serialize_ut.cpp round-trips
+    // deliberately.
+    auto fail = [&] { ReportNumericParseError("float", str, value); };
     try {
         const std::string float_str(str);
-        value = std::stof(float_str);
-    } catch (const std::exception &e) {
-        std::string error_msg = fmt::format("Error: parse float: {} to {}", str, value);
-        std::cerr << error_msg << std::endl;
-        ParserError(error_msg);
+        size_t consumed = 0;
+        value = std::stof(float_str, &consumed);
+        if (!ConsumedWholeNumber(float_str, consumed)) {
+            fail();
+        }
+        // Only the two exceptions std::stof is specified to throw are caught, so an
+        // allocation failure propagates instead of being reported as a parse error.
+    } catch (const std::invalid_argument &e) {
+        fail();
+    } catch (const std::out_of_range &e) {
+        fail();
     }
-#endif
     return value;
 }
 
@@ -790,19 +825,21 @@ DoubleT DataType::StringToValue<DoubleT>(const std::string_view &str) {
         return DoubleT{};
     }
     DoubleT value{};
-#if defined(__APPLE__)
-    auto ret = std::sscanf(str.data(), "%la", &value);
-    ParserAssert((size_t)ret == str.size(), "Error: parse double error");
-#else
+    // See StringToValue<FloatT> above for why this is std::stod with an explicit
+    // consumed-length check rather than std::from_chars or sscanf.
+    auto fail = [&] { ReportNumericParseError("double", str, value); };
     try {
         const std::string double_str(str);
-        value = std::stod(double_str);
-    } catch (const std::exception &e) {
-        std::string error_msg = fmt::format("Error: parse double: {} to {}", str, value);
-        std::cerr << error_msg << std::endl;
-        ParserError(error_msg);
+        size_t consumed = 0;
+        value = std::stod(double_str, &consumed);
+        if (!ConsumedWholeNumber(double_str, consumed)) {
+            fail();
+        }
+    } catch (const std::invalid_argument &e) {
+        fail();
+    } catch (const std::out_of_range &e) {
+        fail();
     }
-#endif
     return value;
 }
 
