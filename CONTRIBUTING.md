@@ -1,47 +1,88 @@
-# Contribution Guidelines
+# Contributing
 
-Thanks for wanting to contribute to Infinity. This document offers guidelines and major considerations for submitting your contributions.
+This repository is the native Apple Silicon port of
+[Infinity](https://github.com/infiniflow/infinity). Where you should file something
+depends on which of the two it belongs to.
 
-- To report a bug, file a [GitHub issue](https://github.com/infiniflow/infinity/issues/new/choose) with us.
-- For further questions, you can explore existing discussions or initiate a new one in [Discussions](https://github.com/orgs/infiniflow/discussions).
+**Belongs here** — anything about the port or the Mac:
 
+- It does not build, configure, link or start on an Apple Silicon Mac.
+- A test fails here but passes upstream on Linux.
+- The macOS tooling (`scripts/apple_silicon/`, `scripts/bench/`, `demo/`) is wrong,
+  unclear, or assumes something about your machine that is not true.
+- The benchmark numbers do not reproduce, or the method behind them is unsound.
+- One of the [known blockers](docs/apple_silicon/EVALUATION.md) — or a new one.
 
-## What you can contribute
+**Belongs upstream** — anything about Infinity itself: SQL semantics, the query
+planner, index algorithms, the Python SDK's API, feature requests for the database.
+File those at [infiniflow/infinity](https://github.com/infiniflow/infinity/issues/new/choose)
+so they reach the people who maintain that code, and so a fix benefits every platform
+rather than this fork alone.
 
-The list below mentions some contributions you can make, but it is not a complete list.
+## Reporting a bug
 
-- Proposing or implementing new features
-- Fixing a bug
-- Adding test cases or demos
-- Posting a blog or tutorial
-- Updates to existing documents, codes, or annotations.
-- Suggesting more user-friendly error codes
+Open a [GitHub issue](https://github.com/jatinsethi98/infinity-apple-silicon/issues/new/choose)
+and include:
 
-## File a pull request (PR)
+- `sw_vers -productVersion` and `sysctl -n machdep.cpu.brand_string`
+- `cmake --version` and `/opt/homebrew/opt/llvm@20/bin/clang++ --version`
+- the commit you are on (`git rev-parse --short HEAD`)
+- for a build failure, the tail of `build/<preset>-build.log`
+- for a runtime failure, the tail of `build/instances/<name>/log/infinity.log`
 
-### General workflow
+The single most common report is not a bug: `infinity.connect()` takes a
+`NetworkAddress`, not a string, and passing a string raises
+`INVALID_SERVER_ADDRESS`, which reads like the server is down.
 
-1. Fork our GitHub repository.
-2. Clone your fork to your local machine: 
-`git clone git@github.com:<yourname>/infinity.git`
-3. Create a local branch: 
-`git checkout -b my-branch`
-4. Provide sufficient information in your commit message
-`git commit -m 'Provide sufficient info in your commit message'`
-5. Commit changes to your local branch, and push to GitHub: (include necessary commit message)
-`git push origin my-branch.`
-6. Submit a pull request for review.
+## Sending a change
 
-### Before filing a PR
+```sh
+git checkout -b my-change
+# ... work ...
+scripts/apple_silicon/build_server.sh macos-arm64-release infinity test_main
+./build/macos-arm64-release/src/test_main
+git push origin my-change
+```
 
-- Consider splitting a large PR into multiple smaller, standalone PRs to keep a traceable development history. 
-- Ensure that your PR addresses just one issue, or keep any unrelated changes small.
-- Add test cases when contributing new features. They demonstrate that your code functions correctly and protect against potential issues from future changes.
-### Describing your PR 
+Then open a pull request. `.github/workflows/macos_arm64.yml` runs the build, the
+unit tests, the SQL logic suite, a crash-recovery check and a packaging self-test on
+a native `macos-15` arm64 runner.
 
-- Ensure that your PR title is concise and clear, providing all the required information.
-- Refer to a corresponding GitHub issue in your PR description if applicable. 
-- Include sufficient design details for *breaking changes* or *API changes* in your description.
+### Before you open it
 
-### Reviewing & merging a PR
-- Ensure that your PR passes all Continuous Integration (CI) tests before merging it.
+- Build and run the tests locally first. A macOS runner is slow and billed at a
+  multiplier; a cold run here is roughly an hour.
+- Keep one concern per pull request.
+- Add a test for a fix. If the bug was a crash, the test should be the call that
+  crashed.
+- If you touch a `scripts/apple_silicon/` script, run it. Several of them are the
+  only thing standing between a reader and a cryptic toolchain error, so a
+  regression there is worse than it looks.
+
+### Performance claims
+
+A change presented as a speedup needs the evidence described in
+[scripts/bench/README.md](scripts/bench/README.md): alternating paired runs rather
+than all-of-A-then-all-of-B, recall scored against the official ground truth, and a
+comparison at matched recall rather than at matched parameters. Record the result in
+[docs/apple_silicon/BENCHMARKS.md](docs/apple_silicon/BENCHMARKS.md) with the raw
+output under `docs/apple_silicon/benchmarks/`. This is not ceremony — the
+optimization campaign behind the current numbers had to discard several changes that
+looked like wins under a single unpaired run.
+
+### Style
+
+- C++23, formatted with `clang-format-20` against the checked-in `.clang-format`.
+- Comments should explain *why*, not *what*. A comment recording why a workaround
+  exists, and what would let it be removed, is worth more than a paragraph
+  restating the code.
+- Match the surrounding code. This tree deliberately carries a lot of explanatory
+  comment in its scripts and platform code, because the failure modes are obscure.
+
+## What is out of scope
+
+- **Restoring Linux or x86-64 support.** It was removed deliberately rather than
+  left in place unverified. Contributing the port back upstream behind portability
+  gates is the right way to serve those platforms; re-adding half-tested build
+  paths here is not.
+- **New database features.** Those belong upstream. See above.

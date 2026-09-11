@@ -1,0 +1,290 @@
+[
+  {
+    "doc_id": 1,
+    "title": "Write-ahead logging and the fsync decision",
+    "category": "storage",
+    "year": 2024,
+    "reading_minutes": 9,
+    "body": "A write-ahead log only guarantees a committed transaction survives an unexpected outage if the log record has actually reached stable media. Calling write() hands the bytes to the page cache, not to the disk, so a commit that returns before fsync can be lost. On macOS the stronger F_FULLFSYNC also drains the drive's own volatile buffer, which costs a couple of milliseconds per commit but is the only setting that is honest about durability."
+  },
+  {
+    "doc_id": 2,
+    "title": "Power management on laptops throttles sustained SSD writes",
+    "category": "hardware",
+    "year": 2023,
+    "reading_minutes": 5,
+    "body": "When a machine runs on battery the power controller lowers the SSD's sustained write ceiling and parks idle NAND planes. Benchmarks that measure write throughput on an unplugged laptop therefore report numbers 30 to 40 percent below the same machine on mains power. Always keep the machine plugged in and thermally settled before recording a result."
+  },
+  {
+    "doc_id": 3,
+    "title": "Type-safe query builders keep SQL injection out of the codebase",
+    "category": "api-design",
+    "year": 2024,
+    "reading_minutes": 6,
+    "body": "A safe query builder makes the unsafe thing unrepresentable: parameters are bound rather than interpolated, so a string from a user can never become part of the parsed statement. The compiler enforces what a code review would otherwise have to catch by hand."
+  },
+  {
+    "doc_id": 4,
+    "title": "Machine learning feature stores and the training-serving skew problem",
+    "category": "ml-systems",
+    "year": 2023,
+    "reading_minutes": 11,
+    "body": "A feature store exists so that the transformation applied at training time is the identical code path applied at serving time. When the two drift apart a model degrades silently, because every offline metric still looks correct while the machine sees inputs it was never trained on."
+  },
+  {
+    "doc_id": 5,
+    "title": "HNSW graph construction: what M and efConstruction actually control",
+    "category": "vector-search",
+    "year": 2024,
+    "reading_minutes": 12,
+    "body": "M sets how many bidirectional links each node keeps per layer and therefore fixes the index's memory footprint. efConstruction sets how wide the candidate beam is while inserting, and buys recall at the cost of build time. Raising efConstruction is almost always the cheaper way to reach a recall target than raising M, because it costs time once rather than memory forever."
+  },
+  {
+    "doc_id": 6,
+    "title": "Reciprocal rank fusion beats score normalization for hybrid retrieval",
+    "category": "vector-search",
+    "year": 2024,
+    "reading_minutes": 8,
+    "body": "BM25 scores and cosine similarities live on incomparable scales, so combining them by weighted sum requires a normalization step that is fragile across corpora. Reciprocal rank fusion throws the magnitudes away and combines the ranks instead, which needs no tuning and is remarkably hard to beat."
+  },
+  {
+    "doc_id": 7,
+    "title": "BM25 term saturation and why long documents need length normalization",
+    "category": "full-text",
+    "year": 2022,
+    "reading_minutes": 7,
+    "body": "BM25 damps the contribution of a repeated term so that the tenth occurrence adds far less than the second, and divides by a length factor so a long document does not win merely by containing more words. The b parameter controls how aggressive that length penalty is."
+  },
+  {
+    "doc_id": 8,
+    "title": "Group commit amortizes the flush cost across concurrent writers",
+    "category": "storage",
+    "year": 2023,
+    "reading_minutes": 10,
+    "body": "If every transaction issues its own device flush, throughput collapses to the inverse of flush latency. Group commit batches the log records of all transactions that arrived during the previous flush and pays one flush for the whole batch, so latency stays bounded while throughput scales with concurrency."
+  },
+  {
+    "doc_id": 9,
+    "title": "Choosing a distance metric: L2, inner product and cosine",
+    "category": "vector-search",
+    "year": 2023,
+    "reading_minutes": 6,
+    "body": "For unit-normalized embeddings, ranking by cosine similarity, by inner product and by negated squared L2 distance all produce the same ordering, so the choice is about arithmetic cost rather than quality. The metrics diverge the moment vectors are not normalized, which is the usual source of a mysterious recall drop."
+  },
+  {
+    "doc_id": 10,
+    "title": "Copy-on-write snapshots without stopping the writers",
+    "category": "storage",
+    "year": 2024,
+    "reading_minutes": 11,
+    "body": "A snapshot can be taken by freezing the metadata at a version number and letting later writes allocate new blocks rather than overwrite referenced ones. Readers of the snapshot keep seeing the old blocks, which are only reclaimed once the last reference goes away."
+  },
+  {
+    "doc_id": 11,
+    "title": "Chunking strategies for retrieval-augmented generation",
+    "category": "rag",
+    "year": 2024,
+    "reading_minutes": 9,
+    "body": "Fixed-size chunking is easy and loses arguments that span a boundary. Splitting on document structure keeps a heading with the paragraph it introduces, and a modest overlap recovers most of what a hard cut would have destroyed. Chunk size interacts with the embedding model's context window, so it is not a free parameter."
+  },
+  {
+    "doc_id": 12,
+    "title": "Why a pure vector database cannot answer most real queries",
+    "category": "rag",
+    "year": 2024,
+    "reading_minutes": 8,
+    "body": "Production questions arrive with structured constraints attached: this tenant, published after last March, in the support category, not archived. A store that indexes only embeddings has to over-fetch and then discard, which quietly breaks the top-k contract because the k nearest neighbours may all be filtered away."
+  },
+  {
+    "doc_id": 13,
+    "title": "Filtered vector search and the top-k correctness trap",
+    "category": "vector-search",
+    "year": 2024,
+    "reading_minutes": 10,
+    "body": "Applying a predicate after the graph traversal is fast and wrong: if the filter is selective the traversal never visits a matching node and the query returns fewer rows than it should. Evaluating the predicate during traversal keeps the result exact at the cost of visiting more of the graph."
+  },
+  {
+    "doc_id": 14,
+    "title": "Prefetching for graph traversal on Apple Silicon",
+    "category": "performance",
+    "year": 2025,
+    "reading_minutes": 13,
+    "body": "The candidate list of an HNSW search is a pointer chase, so the memory system stalls waiting for the next neighbour's vector. Issuing a prefetch for the whole vector one hop ahead, at a stride matching the 128-byte cache line, hides most of that latency. Skipping candidates already marked visited keeps the prefetch queue useful instead of full of work that will be thrown away."
+  },
+  {
+    "doc_id": 15,
+    "title": "Quantization: scalar, product and binary compared",
+    "category": "vector-search",
+    "year": 2023,
+    "reading_minutes": 12,
+    "body": "Scalar quantization to int8 is nearly free to implement and typically costs a fraction of a percent of recall. Product quantization compresses far harder and needs a rerank pass over the original vectors to stay usable. Binary codes are the extreme case and are best treated as a fast candidate generator rather than a final ranking."
+  },
+  {
+    "doc_id": 16,
+    "title": "Tokenization for Chinese, Japanese and Korean full-text search",
+    "category": "full-text",
+    "year": 2023,
+    "reading_minutes": 10,
+    "body": "CJK text has no whitespace between words, so an inverted index needs either a dictionary-driven segmenter or n-gram indexing. A dictionary gives better precision and requires shipping and versioning the dictionary alongside the binary, which is a packaging problem as much as a linguistic one."
+  },
+  {
+    "doc_id": 17,
+    "title": "Crash recovery: replaying a log you do not fully trust",
+    "category": "storage",
+    "year": 2024,
+    "reading_minutes": 11,
+    "body": "The tail of a log is the part most likely to be torn, because it is what was in flight when the process died. Recovery must checksum every record and stop at the first one that fails rather than attempting to interpret it, and it must be able to tell a torn final record apart from genuine corruption in the middle."
+  },
+  {
+    "doc_id": 18,
+    "title": "Read-copy-update for lock-free lookup on a hot map",
+    "category": "concurrency",
+    "year": 2024,
+    "reading_minutes": 12,
+    "body": "Readers traverse the structure with no lock at all while a writer builds a new version and swaps a single pointer. The subtlety is reclamation: the old version can only be freed once every reader that could still be looking at it has finished, and getting that wrong produces a use-after-free that appears only under load."
+  },
+  {
+    "doc_id": 19,
+    "title": "False sharing: when two threads fight over one cache line",
+    "category": "concurrency",
+    "year": 2022,
+    "reading_minutes": 7,
+    "body": "Two counters that live in the same cache line force the cores updating them to bounce exclusive ownership back and forth, so a perfectly partitioned workload scales negatively. Padding each counter to its own line usually recovers the whole loss."
+  },
+  {
+    "doc_id": 20,
+    "title": "Reranking with a cross-encoder after first-stage retrieval",
+    "category": "rag",
+    "year": 2024,
+    "reading_minutes": 9,
+    "body": "A bi-encoder embeds query and document independently, which is what makes an index possible but also what limits its precision. Running a cross-encoder over the top fifty candidates lets the model attend across both texts at once and typically moves the correct passage several ranks up."
+  },
+  {
+    "doc_id": 21,
+    "title": "Sparse learned retrieval: SPLADE and friends",
+    "category": "full-text",
+    "year": 2023,
+    "reading_minutes": 10,
+    "body": "A learned sparse model produces a weighted term vector over the vocabulary, including terms that never appeared in the source text. That keeps the efficiency of an inverted index while recovering some of the vocabulary mismatch that plain BM25 suffers from."
+  },
+  {
+    "doc_id": 22,
+    "title": "Embedding drift and the cost of reindexing a corpus",
+    "category": "ml-systems",
+    "year": 2025,
+    "reading_minutes": 8,
+    "body": "Changing the embedding model invalidates every stored vector, so the migration is a full reindex rather than an upgrade. Planning for it means keeping the source text addressable and treating the vector column as derived data that can always be rebuilt."
+  },
+  {
+    "doc_id": 23,
+    "title": "Buffer pool eviction policies under a scan-heavy workload",
+    "category": "storage",
+    "year": 2022,
+    "reading_minutes": 11,
+    "body": "A single large sequential scan will evict the entire working set under plain LRU, a failure mode severe enough that most engines special-case it. Scan-resistant policies such as LRU-K or a segmented queue keep frequently touched pages resident by requiring more than one access before promotion."
+  },
+  {
+    "doc_id": 24,
+    "title": "Unified memory on Apple Silicon changes the copy calculus",
+    "category": "performance",
+    "year": 2025,
+    "reading_minutes": 9,
+    "body": "CPU and GPU share one physical memory pool, so the staging copy that a discrete card requires disappears. Bandwidth is shared as well, which means a GPU kernel and a memory-bound CPU loop now contend for the same resource instead of running independently."
+  },
+  {
+    "doc_id": 25,
+    "title": "NEON intrinsics and multiple accumulators for distance kernels",
+    "category": "performance",
+    "year": 2025,
+    "reading_minutes": 10,
+    "body": "A single-accumulator dot product serializes on the latency of the fused multiply-add. Splitting into four independent accumulators lets the out-of-order engine keep several FMAs in flight and typically doubles throughput on a wide arm64 core before any change to the memory access pattern."
+  },
+  {
+    "doc_id": 26,
+    "title": "Multi-tenant isolation in a shared search index",
+    "category": "api-design",
+    "year": 2024,
+    "reading_minutes": 9,
+    "body": "One index per tenant gives clean isolation and does not survive contact with ten thousand small tenants. A shared index with a mandatory tenant predicate scales, provided the predicate is enforced below the query API where no caller can omit it."
+  },
+  {
+    "doc_id": 27,
+    "title": "Measuring recall honestly against a published ground truth",
+    "category": "benchmarking",
+    "year": 2025,
+    "reading_minutes": 8,
+    "body": "Recall computed against your own index's answers measures self-consistency, not quality. The ground-truth file that ships with a standard dataset is the only defensible reference, and any speed claim has to be reported at a matched recall or it is not a comparison at all."
+  },
+  {
+    "doc_id": 28,
+    "title": "Paired A/B benchmarking to survive a noisy machine",
+    "category": "benchmarking",
+    "year": 2025,
+    "reading_minutes": 10,
+    "body": "Thermal state and background work drift over minutes, so running all of variant A and then all of variant B confounds the change with the drift. Alternating the two within a block and reporting the median of the paired differences removes most of it and makes a small real effect visible."
+  },
+  {
+    "doc_id": 29,
+    "title": "Bulk import: why the index should be built last",
+    "category": "storage",
+    "year": 2023,
+    "reading_minutes": 7,
+    "body": "Maintaining a graph index while rows stream in pays the insertion cost at the worst possible time and produces a worse graph than a single build over the finished set. Loading first and indexing afterwards is faster and gives better recall."
+  },
+  {
+    "doc_id": 30,
+    "title": "Vocabulary mismatch is the failure mode keyword search cannot fix",
+    "category": "full-text",
+    "year": 2024,
+    "reading_minutes": 8,
+    "body": "An inverted index can only match the words that are present. When the question and the answer use different vocabulary for the same concept the correct document scores zero, and no amount of parameter tuning recovers it. This is the specific gap that dense retrieval closes."
+  },
+  {
+    "doc_id": 31,
+    "title": "Idempotent ingestion pipelines and exactly-once illusions",
+    "category": "ml-systems",
+    "year": 2023,
+    "reading_minutes": 9,
+    "body": "Exactly-once delivery is not available end to end, so the practical target is at-least-once delivery with idempotent application. Giving every record a stable identifier and making the write an upsert converts a retry from a duplicate into a no-op."
+  },
+  {
+    "doc_id": 32,
+    "title": "Observability for search quality, not just latency",
+    "category": "api-design",
+    "year": 2024,
+    "reading_minutes": 7,
+    "body": "Latency dashboards stay green while relevance rots, because a wrong answer is returned just as quickly as a right one. Logging the query, the returned identifiers and whether the user clicked anything is the minimum needed to notice a regression at all."
+  },
+  {
+    "doc_id": 33,
+    "title": "Tensor reranking with late interaction",
+    "category": "rag",
+    "year": 2024,
+    "reading_minutes": 11,
+    "body": "Late-interaction models keep one vector per token rather than one per passage and score by a max-similarity sum across token pairs. That preserves much of a cross-encoder's precision while still allowing the document side to be precomputed and stored."
+  },
+  {
+    "doc_id": 34,
+    "title": "Secondary indexes on low-cardinality columns",
+    "category": "storage",
+    "year": 2023,
+    "reading_minutes": 8,
+    "body": "A B-tree over a column with four distinct values costs more to traverse than the scan it replaces. Bitmap or roaring representations are the right structure there, and the planner needs a cardinality estimate good enough to choose between them."
+  },
+  {
+    "doc_id": 35,
+    "title": "Cost of a self-hosted RAG index versus a managed vector service",
+    "category": "benchmarking",
+    "year": 2025,
+    "reading_minutes": 12,
+    "body": "At a few million vectors the dominant term stops being compute and becomes the per-vector monthly fee, which is where a single well-provisioned machine starts to win decisively. The comparison only holds if you price the operational work of running that machine rather than pretending it is free."
+  },
+  {
+    "doc_id": 36,
+    "title": "Schema evolution without a rewrite",
+    "category": "api-design",
+    "year": 2022,
+    "reading_minutes": 6,
+    "body": "Adding a nullable column can be metadata-only if the storage format tolerates missing values on read. Changing a column's type cannot, so the cheap path is a new column plus a backfill, leaving the old one readable until nothing depends on it."
+  }
+]

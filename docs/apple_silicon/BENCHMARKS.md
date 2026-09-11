@@ -62,7 +62,7 @@ misses per 100,000 neighbour slots. At efC=235 it is at or above FAISS at every 
 a 0.0001 tie at 256, which is one query in 10,000 and inside build-to-build variance. The harness
 driver still prints `RECALL-UNMATCHED` for this run because its gate uses the 64-synthetic-query
 self-audit, an instrument this project retired for parity decisions (see
-[BASELINE.md](BASELINE.md#the-recall-difference-was-mostly-the-ruler-and-what-remains-of-it-is-tiny)).
+[README.md](README.md#the-recall-difference-was-mostly-the-ruler-and-what-remains-of-it-is-tiny)).
 
 ### Other engines, same run
 

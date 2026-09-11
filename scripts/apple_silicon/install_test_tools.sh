@@ -3,10 +3,12 @@
 # Install the external test tools the suites need, into a repo-local prefix.
 #
 # Only sqllogictest today. It is a Rust binary that the .slt suites are driven
-# through by tools/sqllogictest.py, and CI installs it from a release tarball
-# rather than building it. We pin the SAME version CI pins (see the "Install
-# sqllogictest" steps in .github/workflows/tests.yml) so a local run and a CI run
-# disagree about the engine, never about the harness.
+# through by tools/sqllogictest.py, installed from a release tarball rather than
+# built. The version is pinned here so that a local run and a CI run disagree about
+# the engine, never about the harness: .github/workflows/macos_arm64.yml calls this
+# same script rather than installing its own copy, which is what makes the pin
+# single-sourced. (Upstream's tests.yml pinned it separately; that workflow does not
+# exist in this fork.)
 #
 # Installs to build/tools/bin rather than /usr/local/bin: no sudo, and nothing
 # outside the repo changes. Add it to PATH:
@@ -15,7 +17,7 @@
 #
 set -euo pipefail
 
-# Keep in sync with .github/workflows/tests.yml.
+# The single source of truth for the sqllogictest version, local and CI alike.
 SQLLOGICTEST_VERSION=0.28.4
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)

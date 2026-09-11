@@ -73,7 +73,11 @@ EXTERNAL_SATURATION_RECALL = 0.999
 
 
 def one_build(binary, engine, args, efc):
+    # Create the directory rather than assuming it: only run_baseline.py's dataset
+    # generation made it, so running this script first failed with an unhelpful
+    # ENOENT from inside the harness.
     sidecar = "/tmp/d0test/iso_sidecar_%s_%d.json" % (engine, os.getpid())
+    os.makedirs(os.path.dirname(sidecar), exist_ok=True)
     if os.path.exists(sidecar):
         os.remove(sidecar)
     argv = campaign.build_argv(

@@ -1,0 +1,11 @@
+# Scratch used while narrowing a finding down: one-off probes, bisects and
+# explorations. They are throwaway by design -- each one existed to answer a single
+# question, hardcodes whatever ports and row counts that question needed, and is
+# superseded by whichever committed test_*_e2e.py suite came out of it.
+#
+# Keeping them out of the tree is deliberate: a reader cannot tell a probe that
+# proves something from a probe that was abandoned halfway, so committing them would
+# add 45 files of ambiguous authority next to 19 suites of clear authority.
+_*.py
+_*.json
+scratch_explore.py

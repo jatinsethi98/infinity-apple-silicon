@@ -23,10 +23,10 @@ rather than documenting it as a gotcha.
 | Full-text search, incl. CJK dictionaries | Working | `dql/fulltext` 8/8 plus a new dictionary-backed test |
 | Update / delete / drop | Working | `dml/delete` 4/4, `dml/update`, `ddl/drop`, `dml/compact` 7/7, `dml/cleanup` |
 | Bulk import | Working | `dml/import` 27/27, `dml/export` 5/5 |
-| Crash recovery (process death) | Working | `verify_crash_recovery.sh --rows 2000` |
+| Crash recovery (process death) | Working | `verify_crash_recovery.sh --rows 2000`; `EVALUATION.md` extends this to power-loss-safe fsync, and to corrupt-WAL handling, which is **broken** |
 | Packaging | Working, self-tested | `make_package.sh` → 128 MB relocatable tarball |
 | macOS CI | Written, **never executed** | `.github/workflows/macos_arm64.yml` |
-| Linux x86-64 / ARM64 unchanged | **Not re-verified** | needs a CI run on this branch |
+| Linux x86-64 / ARM64 | **Removed** | `CMakeLists.txt` refuses a non-Darwin host before `project()`; use [upstream](https://github.com/infiniflow/infinity) |
 | HTTP API, cluster mode | **Not tested** | see "Not covered" |
 
 ## Reproducing it
@@ -95,27 +95,54 @@ usual "widen the float type" fix is not an option either. Left unfixed deliberat
 it is a numerical change to vendored third-party code and belongs in its own change
 with its own validation.
 
-## Findings reported but deliberately not fixed
+## Findings reported here, then fixed
 
-Both are real, both are upstream, and both are platform-independent. Fixing either
-inside a port would be making a storage-engine decision in the wrong place.
+> **Both findings below were subsequently fixed on this branch, and both fixes are
+> verified working.** See `EVALUATION.md` for the verification. The original text is kept
+> because the reasoning about *why* each was left alone at the time is still the record of
+> that decision — but do not read either as describing current behaviour.
 
-**The WAL never fsyncs.** `src/storage/wal/wal_manager_impl.cpp` — all three
-`FlushOptionType` branches call only `ofstream::flush()`, and two carry upstream's own
-`// FIXME: not flush` comments. There is no `fsync` anywhere in the WAL write path.
-Bytes reach the kernel page cache, so **process death is survivable and power loss is
-not**, on every platform. This is why the recovery check above is described as process
-death only. On Darwin the eventual fix is harder than adding `fsync`: `fsync` does not
-flush the drive's write cache on macOS, so it needs `F_FULLFSYNC`.
+**The WAL never fsyncs.** — *Fixed by commit `b2d5937`.* `full_fsync` is now the shipped
+default and uses `F_FULLFSYNC`; the three `wal_flush` modes are distinct and live. Measured:
+median single-row commit latency 3.4–3.9 ms under `full_fsync` versus ~0.17 ms under `fsync`
+and `no_sync`, a ~10–12× min-latency ratio that confirms a real device flush. Group commit
+amortises it (4.2× throughput at 8 concurrent clients). Acknowledged commits survive SIGKILL
+and WAL replay in all three modes.
 
-**Exported files are not truncated.** `src/storage/io/virtual_store_impl.cpp:127` opens
-`FileAccessMode::kWrite` with `O_RDWR | O_CREAT` and no `O_TRUNC`, and writes begin at
-offset zero. Exporting a short result over a longer existing file leaves the previous
-tail in place. 22 production call sites share that mode, including buffer-manager file
-workers and snapshot metadata, and some may rely on writing into an existing file, so a
-blanket `O_TRUNC` risks data loss. The targeted fix is a separate `kWriteTruncate` mode
-used by the export path. `run_slt.py` clears its staging `tmp/` before every run so the
-export suites are at least not affected by the previous run's leftovers.
+<details><summary>Original finding (historical)</summary>
+
+`src/storage/wal/wal_manager_impl.cpp` — all three `FlushOptionType` branches call only
+`ofstream::flush()`, and two carry upstream's own `// FIXME: not flush` comments. There is no
+`fsync` anywhere in the WAL write path. Bytes reach the kernel page cache, so **process death
+is survivable and power loss is not**, on every platform. This is why the recovery check above
+is described as process death only. On Darwin the eventual fix is harder than adding `fsync`:
+`fsync` does not flush the drive's write cache on macOS, so it needs `F_FULLFSYNC`.
+
+</details>
+
+Note that fixing the fsync did **not** make the WAL trustworthy end to end: a single corrupted
+byte in it causes the engine to delete the entire log and abort startup, losing every commit
+since the last checkpoint. See `EVALUATION.md` blocker 5.
+
+**Exported files are not truncated.** — *Fixed by commit `ccc58a3d`.* `COPY TO` now refuses to
+overwrite an existing file, and a refused overwrite leaves the original byte-identical.
+
+<details><summary>Original finding (historical)</summary>
+
+`src/storage/io/virtual_store_impl.cpp:127` opens `FileAccessMode::kWrite` with
+`O_RDWR | O_CREAT` and no `O_TRUNC`, and writes begin at offset zero. Exporting a short result
+over a longer existing file leaves the previous tail in place. 22 production call sites share
+that mode, including buffer-manager file workers and snapshot metadata, and some may rely on
+writing into an existing file, so a blanket `O_TRUNC` risks data loss. The targeted fix is a
+separate `kWriteTruncate` mode used by the export path. `run_slt.py` clears its staging `tmp/`
+before every run so the export suites are at least not affected by the previous run's
+leftovers.
+
+</details>
+
+CSV export has a *separate*, still-open escaping defect: varchar containing a comma, quote or
+newline is written unquoted, so an export → re-import round-trip corrupts data
+(`EVALUATION.md` blocker 10).
 
 ## A finding that was refuted, and a different one at the same site that was not
 
@@ -136,22 +163,35 @@ constructor and never republished, so there is no publish/subscribe race to lose
 any platform. Converting it to `std::atomic` with acquire/release would be reasonable
 hardening but fixes nothing today.
 
-**The site is not safe, though, and for a different reason.** `RcuMultiMap::range`
-(`rcu_multimap.cppm:372`) acquires `dirty_lock_` only long enough to copy the
-`dirty_map_` pointer (`:381-383`), then **releases it and iterates the container
-unlocked** — `lower_bound`, `upper_bound` and the merge loop all run outside the lock,
-while `Insert` mutates that same `std::multimap` under it. Concurrent access is expected
-here: an indexing thread appending to the in-memory secondary index and a query thread
-in `RangeQueryInner` (`secondary_index_in_mem_impl.cpp:217-220`) reach it at the same
-time. Iterating a `std::multimap` while another thread inserts into it is a data race
-and undefined behaviour — the red-black tree rebalances under the reader.
+**The site is not safe, though, and for a different reason.** — *Fixed by commit `ccc58a3d`,
+which holds `dirty_lock_` across the whole traversal. Verified: ~49,000 concurrent range
+queries against 120,000 concurrent inserts, ~48M rows validated, zero violations, no crash,
+no hang, and the state survives SIGKILL + WAL recovery. The serialisation cost is negligible
+(median ×1.0 versus quiescent), so it is not a throughput regression. See `EVALUATION.md`.*
 
-That is platform-independent, not an arm64 issue, though weak ordering makes the
-consequences less predictable. It is also genuinely a storage-engine fix (hold the lock
-across the iteration, or make this a real RCU with reader reference counting) with
-throughput implications, so it is reported rather than changed here — the same call as
-the WAL and export findings above. The related concern that readers take no grace period
-and the old map is freed without draining them is part of the same defect.
+<details><summary>Original finding (historical)</summary>
+
+`RcuMultiMap::range` (`rcu_multimap.cppm:372`) acquires `dirty_lock_` only long enough to copy
+the `dirty_map_` pointer (`:381-383`), then **releases it and iterates the container
+unlocked** — `lower_bound`, `upper_bound` and the merge loop all run outside the lock, while
+`Insert` mutates that same `std::multimap` under it. Concurrent access is expected here: an
+indexing thread appending to the in-memory secondary index and a query thread in
+`RangeQueryInner` (`secondary_index_in_mem_impl.cpp:217-220`) reach it at the same time.
+Iterating a `std::multimap` while another thread inserts into it is a data race and undefined
+behaviour — the red-black tree rebalances under the reader.
+
+That is platform-independent, not an arm64 issue, though weak ordering makes the consequences
+less predictable. It is also genuinely a storage-engine fix (hold the lock across the
+iteration, or make this a real RCU with reader reference counting) with throughput
+implications, so it is reported rather than changed here — the same call as the WAL and export
+findings above. The related concern that readers take no grace period and the old map is freed
+without draining them is part of the same defect.
+
+</details>
+
+One caveat on the verification: it ran against the release binary. Testing that the race is
+*gone* rather than merely not observed would need a ThreadSanitizer build, which has not been
+done.
 
 An earlier revision of this document claimed "all live data sits in `dirty_map_` behind
 `dirty_lock_`". That was wrong: the pointer is read under the lock, the container is

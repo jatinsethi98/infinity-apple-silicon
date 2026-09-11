@@ -59,6 +59,13 @@ cmake_version=$(cmake --version | head -1 | awk '{print $3}')
 cmake_sortable=$(printf '%s' "$cmake_version" | awk -F. '{printf "%d%03d%03d", $1, $2, $3}')
 (( cmake_sortable >= 4000003 )) \
     || die "cmake $cmake_version is too old; 4.0.3 or newer required (brew upgrade cmake)"
+# And the upper end: CMakeLists.txt maps the CMAKE_EXPERIMENTAL_CXX_IMPORT_STD UUID
+# per version and FATAL_ERRORs at 4.5 or above. Catch that here, where the message
+# can say what to do about it, rather than at the configure step where it cannot.
+(( cmake_sortable < 4005000 )) \
+    || die "cmake $cmake_version is newer than this build supports (4.0.3 up to 4.4.x);
+       \`import std\` is gated behind a version-specific UUID that has to be adopted
+       deliberately. Install a supported cmake, e.g. brew install cmake@4.4"
 
 # ------------------------------------------------------------------- SDKROOT
 

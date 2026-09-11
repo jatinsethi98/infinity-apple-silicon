@@ -132,30 +132,58 @@ whole-vector prefetch fix) and the decomposition superseded the guesses built on
 traversal counts, the two changes that came out of it, and the five hypotheses it killed.
 
 ## Reproduce every number (one command each)
+
+Prerequisites, once. These commands were originally recorded against an absolute
+dataset path on the author's machine; they now use the repository-relative layout that
+`fetch_datasets.py` produces, so they run from a fresh clone.
+
+```bash
+# Binaries: the bench preset gives both arms, and build_faiss_accelerate.sh gives
+# the Accelerate-linked FAISS the campaign actually compared against.
+cmake --preset bench -S tools/apple_silicon/native_hnsw_smoke
+cmake --build build/bench --target infinity_hnsw_d0 faiss_hnsw_d0
+scripts/apple_silicon/build_faiss_accelerate.sh
+
+# SIFT1M into ./datasets/sift1m/
+python3 scripts/bench/fetch_datasets.py sift1m
+export HNSW_D0_EXTERNAL_QUERIES=$PWD/datasets/sift1m/query.f32
+export HNSW_D0_EXTERNAL_GROUNDTRUTH=$PWD/datasets/sift1m/groundtruth.i32
+
+# The 200k arm is the first 102,400,000 bytes (200,000 x 128 f32) of base.f32.
+mkdir -p datasets/synth
+head -c 102400000 datasets/sift1m/base.f32 > datasets/synth/sift1m-base-200k-d128.f32
+```
+
+`--participants 12` below is the thread count these runs were measured at, on a 12-core
+M3 Pro. Keep it to compare against the numbers in this document; use
+`$(sysctl -n hw.ncpu)` to characterise your own machine instead.
+
 ```bash
 # Task 1 — FAISS Homebrew vs Accelerate A/B (12,288×128)
+# The synthetic dataset is generated deterministically by run_baseline.py's
+# --dataset default if it is absent, so this path is created on first use.
 python3 scripts/bench/faiss_ab.py \
   --homebrew-bin build/bench/faiss_hnsw_d0 --fromsrc-bin build/bench-faiss-src/faiss_hnsw_d0 \
-  --dataset /tmp/d0test/d0-f32le-n12288-d128-seed0.bin --n 12288 --d 128 \
+  --dataset datasets/synth/d0-f32le-n12288-d128-seed0.bin --n 12288 --d 128 \
   --m 32 --efc 200 --participants 12 --runs 5
 
-# Task 2 — SIFT1M equal-param baseline (swap --n 200000 --dataset /tmp/d0test/sift1m-base-200k-d128.f32 for 200k)
+# Task 2 — SIFT1M equal-param baseline
+# For the 200k arm: --n 200000 --dataset datasets/synth/sift1m-base-200k-d128.f32
 python3 scripts/bench/run_baseline.py \
-  --dataset /Users/sethjatq/Desktop/proj/datasets/sift1m/base.f32 --n 1000000 --d 128 \
+  --dataset datasets/sift1m/base.f32 --n 1000000 --d 128 \
   --m 32 --efc 200 --ef 32,64,128,256,512 --participants 12 --pairs 3 \
   --chunk-size 8192 --query-count 1000 --build-grain 1 --timeout 1800 \
   --infinity-bin build/bench/infinity_hnsw_d0 --faiss-bin build/bench-faiss-src/faiss_hnsw_d0
 
 # Task 3 — 1M iso-recall sweep (FAISS fixed @200, Infinity swept)
 python3 scripts/bench/iso_recall.py \
-  --dataset /Users/sethjatq/Desktop/proj/datasets/sift1m/base.f32 --n 1000000 --d 128 \
+  --dataset datasets/sift1m/base.f32 --n 1000000 --d 128 \
   --m 32 --faiss-efc 200 --infinity-efc 250,300,400 --participants 12 --pairs 2 \
   --query-count 1000 --build-grain 1 --timeout 1800 \
   --infinity-bin build/bench/infinity_hnsw_d0 --faiss-bin build/bench-faiss-src/faiss_hnsw_d0
 ```
 Every `iso_recall.py` row is independently reproducible with `run_baseline.py`: FAISS@200 is
 the FAISS row of the `--efc 200` run; Infinity@X is the Infinity row of an `--efc X` run.
-The 200k dataset is the first 102,400,000 bytes (200,000×128 f32) of SIFT1M `base.f32`.
 
 ## Limitations (read before quoting a number)
 - **Unstable power** (battery/flaky AC). Thermal stayed nominal and FAISS MAD ≤0.8% argues no

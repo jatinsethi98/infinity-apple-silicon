@@ -1,8 +1,9 @@
 name: macos-arm64
 
-# Native Apple Silicon build and test. Separate from tests.yml because that workflow
-# runs every job inside the infiniflow/infinity_builder Linux container, which cannot
-# host a Darwin build at all.
+# Native Apple Silicon build and test. This is the only test workflow in this fork:
+# upstream's tests.yml and slow_tests.yml ran every job inside the
+# infiniflow/infinity_builder Linux container, which cannot host a Darwin build at
+# all, and were removed along with Linux support.
 #
 # HONEST STATUS: at the time this file was added it had NOT yet been executed by a
 # GitHub runner. Everything it does was run by hand on an M-series Mac and the

@@ -1,10 +1,16 @@
 # .gitignore uses glob patterns instead of regex
 
 # file names without extension
+#
+# Every extensionless file is ignored by default, so anything without a dot has to be
+# un-ignored explicitly below or `git add` will silently do nothing. LICENSE predates
+# this rule and is tracked, which is why it needs no exception; NOTICE does.
 *
 !*.*
 !*/
 !ports/*/usage
+!LICENSE
+!NOTICE
 
 # names with special characters
 *#*

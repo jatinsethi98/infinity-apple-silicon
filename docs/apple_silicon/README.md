@@ -19,7 +19,7 @@ guide: how to build, what differs from the Linux build, and why. Results are in
 | Packaging | Relocatable arm64 tarball, self-tested from a relocated path |
 | macOS CI | Workflow written, **not yet executed by a runner** |
 | HTTP API, cluster mode | Not tested |
-| Linux x86-64 / ARM64 preservation | Not yet re-verified after the port |
+| Linux x86-64 / ARM64 | **Removed.** `CMakeLists.txt` refuses a non-Darwin host; use [upstream](https://github.com/infiniflow/infinity) |
 
 Each of those rows has the command that produced it, and the five remaining unit-test
 failures are itemised with root causes, in
@@ -71,12 +71,32 @@ toolchain; the script turns it off because the comparison is CPU HNSW.
 
 ## Building the full server (about an hour, needs vcpkg)
 
-```sh
-git clone https://github.com/microsoft/vcpkg.git
-cd vcpkg && ./bootstrap-vcpkg.sh -disableMetrics
-export VCPKG_ROOT=$PWD
-cd -
+The short way, which does everything below and is safe to re-run:
 
+```sh
+scripts/apple_silicon/setup.sh --with-tests
+```
+
+The long way, if you want to drive it yourself:
+
+```sh
+# 1. Analyzer dictionaries. Required: without them the full-text analyzers have no
+#    dictionaries, the RAGAnalyzer unit tests fail, and a package built from this
+#    tree would ship broken CJK full-text search.
+git submodule update --init --recursive resource
+
+# 2. vcpkg. A --depth=1 clone is NOT enough: manifest mode must be able to
+#    `git show <baseline>:versions/baseline.json` for the commit pinned in
+#    vcpkg.json, and in a shallow clone that commit is a graft with no tree. The
+#    resulting error names spdlog or thrift, not the clone depth.
+git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git
+git -C vcpkg fetch --depth=1 origin "$(sed -n 's/.*"builtin-baseline"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' vcpkg.json | head -1)"
+git -C vcpkg checkout FETCH_HEAD
+vcpkg/bootstrap-vcpkg.sh -disableMetrics
+export VCPKG_ROOT=$PWD/vcpkg
+export SDKROOT=$(xcrun --show-sdk-path)
+
+# 3. Configure and build.
 cmake --preset macos-arm64-release          # full server, Release
 cmake --build --preset macos-arm64-release
 
@@ -84,10 +104,16 @@ cmake --preset macos-arm64-debug            # unit tests
 cmake --build --preset macos-arm64-test     # builds test_main
 ```
 
-A shallow vcpkg clone is not enough: vcpkg must be able to
-`git show <baseline>:versions/baseline.json` for the baseline commit pinned in `vcpkg.json`.
+Prefer `scripts/apple_silicon/build_server.sh <preset> <targets...>` over calling
+`cmake --preset` directly. It checks the CMake version against the range the presets
+actually support (4.0.3 up to 4.4.x — `import std` is gated behind a version-specific
+UUID at both ends), locates or repairs `VCPKG_ROOT` and `SDKROOT`, and repairs a
+shallow vcpkg baseline in place. Calling `cmake --preset` with `VCPKG_ROOT` unset
+fails with a toolchain path of literally `/scripts/buildsystems/vcpkg.cmake`.
+
 Presets live in `CMakePresets.json`. The server build was last verified on the M3 Pro in
-August 2026 and has not been re-run on the M4 as of the September 2026 benchmarks.
+September 2026; see [MACOS_VERIFICATION.md](MACOS_VERIFICATION.md) for what that run
+covered.
 
 ## Benchmarking
 
@@ -102,11 +128,18 @@ python3 scripts/bench/run_baseline.py --help
 
 ## Platform boundaries
 
-Where the port diverges from Linux, and why:
+This fork builds only for `arm64-apple-darwin`. `CMakeLists.txt` checks
+`CMAKE_HOST_SYSTEM_NAME` before `project()` and fails with a message naming the
+platform, so a Linux or x86-64 attempt stops immediately rather than failing later in
+a toolchain probe. The sections below record where the port diverged from Linux and
+why, which is the information needed to re-land this work upstream behind portability
+gates.
 
-- **Linker/toolchain.** `-fuse-ld=mold`, GNU static-libgcc/libstdc++ flags, and the cross-compile
-  blocks in the top-level `CMakeLists.txt` are gated behind `CMAKE_SYSTEM_NAME STREQUAL "Linux"`.
-  On Apple the build discovers Homebrew libc++'s `libc++.modules.json` instead.
+- **Linker/toolchain.** Upstream's `-fuse-ld=mold`, GNU static-libgcc/libstdc++ flags
+  and cross-compile blocks were removed from the top-level `CMakeLists.txt` rather
+  than left gated behind `CMAKE_SYSTEM_NAME STREQUAL "Linux"`, since nothing here can
+  exercise them. On Apple the build discovers Homebrew libc++'s
+  `libc++.modules.json` instead.
 - **Architecture detection.** `INFINITY_TARGET_PROCESSOR` is derived from `CMAKE_OSX_ARCHITECTURES`
   on Apple, since `CMAKE_SYSTEM_PROCESSOR` is unreliable there.
 - **SIMD.** The distance kernels are written in x86 SSE/AVX intrinsics and lowered to NEON by
