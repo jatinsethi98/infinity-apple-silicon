@@ -32,6 +32,16 @@ not here. Versions will follow `v0.7.3-apple.N` until the port and upstream conv
 - `scripts/check_md_links.py` checks every relative link and anchor; it runs under
   `make lint` and in CI.
 
+### Engine
+
+- `Value::StringToValue` parsed float and double with `std::from_chars`, whose
+  floating-point overload is implemented inside the libc++ library from LLVM 20 on.
+  Compiling against Homebrew LLVM 20's headers but linking the macOS SDK's libc++
+  works only when the SDK is recent enough to export it (Xcode 26 does, the macos-15
+  CI runner's Xcode 16.4 does not), and a binary linked that way cannot load on an
+  older macOS regardless of the 14.0 deployment target. It now uses `strtof`/`strtod`
+  with the same strictness, which every supported macOS provides.
+
 ### CI
 
 - Fixed the native macOS workflow's first run: the hosted runner has no Homebrew

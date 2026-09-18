@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+module;
+
+#include <cerrno>
+
 module infinity_core:value.impl;
 
 import :value;
@@ -1619,6 +1623,37 @@ uint64_t Value::Hash() const {
     }
     return 0;
 }
+// strtof/strtod rather than std::from_chars for float and double.
+//
+// Floating-point from_chars is not header-only in libc++: from LLVM 20 the parser lives
+// in the libc++ library itself as __from_chars_floating_point<T>. This tree compiles
+// against Homebrew LLVM 20's headers, which declare it, but links against the macOS
+// SDK's libc++, which only exports it from recent SDKs: the Xcode 26 SDK does, the Xcode
+// 16.4 SDK on the macos-15 CI runner does not. So a build on a current developer Mac
+// links, and a build on the runner fails with "undefined symbol
+// __from_chars_floating_point<double>"; and a binary that does link this way carries a
+// strong reference the dynamic loader cannot satisfy on an older macOS, despite the
+// 14.0 deployment target. strtof and strtod are in libSystem on every supported macOS.
+//
+// The checks keep from_chars' contract: the whole string must be one decimal number,
+// no leading whitespace or '+' (strtod accepts both), no hex form, and a value outside
+// the type's range is an error rather than silently +/-inf or 0.
+template <typename T>
+static bool ParseFloatingPoint(const std::string &str, T &out) {
+    if (str.empty() || std::isspace(static_cast<unsigned char>(str.front())) != 0 || str.front() == '+' ||
+        str.find_first_of("xX") != std::string::npos) {
+        return false;
+    }
+    errno = 0;
+    char *end = nullptr;
+    if constexpr (std::is_same_v<T, float>) {
+        out = std::strtof(str.c_str(), &end);
+    } else {
+        out = std::strtod(str.c_str(), &end);
+    }
+    return end == str.c_str() + str.size() && errno != ERANGE;
+}
+
 Value Value::StringToValue(const std::string &str, const DataType &data_type) {
     Value value(data_type);
     value.type_ = data_type;
@@ -1672,8 +1707,7 @@ Value Value::StringToValue(const std::string &str, const DataType &data_type) {
         }
         case LogicalType::kFloat: {
             FloatT val;
-            auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), val);
-            if (ec != std::errc() || ptr != str.data() + str.size()) {
+            if (!ParseFloatingPoint(str, val)) {
                 UnrecoverableError(fmt::format("Invalid Float string: {}", str));
             }
             value.value_.float32 = val;
@@ -1681,8 +1715,7 @@ Value Value::StringToValue(const std::string &str, const DataType &data_type) {
         }
         case LogicalType::kDouble: {
             DoubleT val;
-            auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), val);
-            if (ec != std::errc() || ptr != str.data() + str.size()) {
+            if (!ParseFloatingPoint(str, val)) {
                 UnrecoverableError(fmt::format("Invalid Double string: {}", str));
             }
             value.value_.float64 = val;
