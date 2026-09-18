@@ -1,8 +1,0 @@
-*
-
-!cmake/
-!ports/
-!nltk_data/
-!vcpkg.json
-!resource
-!cmake-build-reldeb/src/infinity
