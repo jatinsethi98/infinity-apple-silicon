@@ -220,7 +220,11 @@ EOF
 log "creating $tarball"
 tar -czf "$tarball" -C "$outdir" "$name"
 size=$(du -h "$tarball" | cut -f1)
-log "packaged $tarball ($size)"
+# A checksum beside the tarball, in `shasum -a 256` format, so install.sh and anyone
+# downloading by hand can verify the asset. A release asset can be replaced after
+# publication without the tag moving; the checksum is what makes that detectable.
+(cd "$outdir" && shasum -a 256 "${name}.tar.gz" >"${name}.tar.gz.sha256")
+log "packaged $tarball ($size); checksum in ${tarball}.sha256"
 
 # ------------------------------------------------------------------- self-test
 

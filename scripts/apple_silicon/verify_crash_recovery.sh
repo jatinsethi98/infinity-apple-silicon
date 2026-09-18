@@ -8,14 +8,12 @@
 # restarts it and requires every acknowledged commit to still be there. That covers
 # WAL append, catalog persistence, checkpoint, and replay-on-startup.
 #
-# It does NOT prove durability against machine crash or power loss, and it must not
-# be cited as if it did. The WAL commit path calls only std::ofstream::flush()
-# (src/storage/wal/wal_manager_impl.cpp, where two of the three FlushOptionType
-# branches carry upstream's own "FIXME: not flush" comments) and never fsync. Bytes
-# reach the kernel page cache, so SIGKILL is survivable because the OS still holds
-# them; a power cut is not. That gap is upstream and platform-independent, and on
-# Darwin closing it properly needs F_FULLFSYNC rather than plain fsync, since fsync
-# on macOS does not flush the drive's write cache.
+# It does NOT prove durability against machine crash or power loss, because SIGKILL
+# leaves the kernel page cache intact: a test that only kills the process cannot tell
+# a synced WAL from an unsynced one. Power-loss durability is a separate claim. Since
+# commit b2d59374a the WAL syncs each committed batch (F_FULLFSYNC by default, see the
+# [wal] section of conf/infinity_conf.toml), and test/eval_macos/test_wal_durability_e2e.py
+# checks that the setting is live; what this script adds is the replay-on-restart half.
 #
 # Usage:
 #   scripts/apple_silicon/verify_crash_recovery.sh [--rows N] [--keep]

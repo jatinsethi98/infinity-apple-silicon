@@ -51,6 +51,19 @@ llvm_prefix=${LLVM_PREFIX:-/opt/homebrew/opt/llvm@20}
 command -v cmake >/dev/null || die "cmake not found — brew install cmake"
 command -v ninja >/dev/null || die "ninja not found — brew install ninja"
 
+# vcpkg's thrift port needs bison 3.7+ (it passes --file-prefix-map). macOS ships
+# bison 2.3 and vcpkg only warns before using it, so the failure would otherwise
+# arrive minutes into the dependency build as "unrecognized option". vcpkg looks in
+# the two Homebrew prefixes before PATH; check the same places in the same order.
+bison_bin=""
+for candidate in /opt/homebrew/opt/bison/bin/bison /usr/local/opt/bison/bin/bison "$(command -v bison || true)"; do
+    if [[ -n $candidate && -x $candidate ]]; then bison_bin=$candidate; break; fi
+done
+[[ -n $bison_bin ]] || die "bison not found — the thrift dependency needs bison 3.7+: brew install bison"
+bison_sortable=$("$bison_bin" --version | head -1 | awk '{print $NF}' | awk -F. '{printf "%d%03d", $1, $2}')
+(( bison_sortable >= 3007 )) \
+    || die "$bison_bin is bison $("$bison_bin" --version | head -1 | awk '{print $NF}'); the thrift dependency needs 3.7+ — brew install bison"
+
 # The presets key `import std` support to the CMake version, so an old CMake
 # configures and then fails deep in the build with unresolved std module imports.
 cmake_version=$(cmake --version | head -1 | awk '{print $3}')

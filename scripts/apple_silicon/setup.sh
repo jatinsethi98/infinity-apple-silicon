@@ -11,7 +11,7 @@
 #
 # What it does, in order, skipping anything already done:
 #   1. checks the host is arm64 macOS with the Xcode command line tools
-#   2. installs the Homebrew toolchain (llvm@20, cmake, ninja, libomp)
+#   2. installs the Homebrew toolchain (llvm@20, cmake, ninja, libomp, bison)
 #   3. initialises the `resource` submodule (full-text analyzer dictionaries)
 #   4. clones and bootstraps vcpkg at the baseline pinned in vcpkg.json
 #   5. hands off to build_server.sh, which owns the configure and build
@@ -99,7 +99,11 @@ else
        Or pass --skip-brew if you are providing clang 20, cmake 4.0.3+, ninja and libomp yourself."
     # llvm@20 specifically: the project hard-fails below clang 20 and needs a libc++
     # whose module manifest matches the compiler. Apple Clang cannot build this.
-    for formula in llvm@20 ninja libomp; do
+    # bison: vcpkg's thrift port passes --file-prefix-map, which needs bison 3.7+.
+    # macOS ships 2.3 at /usr/bin/bison and vcpkg only warns before using it, so a
+    # machine without Homebrew bison fails minutes into the dependency build with
+    # "unrecognized option". vcpkg looks in /opt/homebrew/opt/bison/bin on its own.
+    for formula in llvm@20 ninja libomp bison; do
         if brew list --versions "$formula" >/dev/null 2>&1; then
             info "$formula already installed"
         else
@@ -126,6 +130,20 @@ fi
 command -v cmake >/dev/null || die "cmake not found; brew install cmake"
 command -v ninja >/dev/null || die "ninja not found; brew install ninja"
 
+# vcpkg searches /opt/homebrew/opt/bison/bin and /usr/local/opt/bison/bin before PATH,
+# so check the same places it will, in the same order.
+bison_bin=""
+for candidate in /opt/homebrew/opt/bison/bin/bison /usr/local/opt/bison/bin/bison "$(command -v bison || true)"; do
+    if [[ -n $candidate && -x $candidate ]]; then bison_bin=$candidate; break; fi
+done
+[[ -n $bison_bin ]] || die "bison not found. The thrift dependency needs bison 3.7 or newer:
+         brew install bison"
+bison_version=$("$bison_bin" --version | head -1 | awk '{print $NF}')
+bison_sortable=$(printf '%s' "$bison_version" | awk -F. '{printf "%d%03d", $1, $2}')
+(( bison_sortable >= 3007 )) \
+    || die "bison $bison_version at $bison_bin is too old; the thrift dependency needs 3.7 or newer.
+       macOS ships 2.3. Install a current one with: brew install bison"
+
 # CMakeLists.txt selects a CMAKE_EXPERIMENTAL_CXX_IMPORT_STD UUID per CMake
 # version and FATAL_ERRORs outside 4.0.3 ... 4.4.x. Check BOTH ends here: too old
 # configures cleanly and then dies on `import std`, and too new fails at the
@@ -147,6 +165,7 @@ fi
 info "clang: $("$llvm_prefix/bin/clang++" --version | head -1)"
 info "cmake: $cmake_version"
 info "ninja: $(ninja --version)"
+info "bison: $bison_version ($bison_bin)"
 
 # ------------------------------------------------------- 3. resource submodule
 

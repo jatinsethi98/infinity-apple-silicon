@@ -65,10 +65,12 @@ jobs:
           set -eux
           # llvm@20 specifically: the project hard-fails below clang 20 and needs a
           # libc++ whose module manifest matches. Apple Clang is not usable.
-          brew install llvm@20 ninja libomp
+          # bison 3.7+ is required by vcpkg's thrift port; macOS ships 2.3.
+          brew install llvm@20 ninja libomp bison
           brew install cmake || brew upgrade cmake
           "$LLVM_PREFIX/bin/clang++" --version
           cmake --version
+          /opt/homebrew/opt/bison/bin/bison --version | head -1
 
       - name: Resolve the pinned vcpkg baseline
         id: baseline
@@ -133,7 +135,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: infinity-macos-arm64
-          path: build/package/*.tar.gz
+          path: |
+            build/package/*.tar.gz
+            build/package/*.tar.gz.sha256
           retention-days: 14
           if-no-files-found: error
 
@@ -145,4 +149,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: build/package/*.tar.gz
+          files: |
+            build/package/*.tar.gz
+            build/package/*.tar.gz.sha256
