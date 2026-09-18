@@ -11,7 +11,7 @@
 #
 # What it does, in order, skipping anything already done:
 #   1. checks the host is arm64 macOS with the Xcode command line tools
-#   2. installs the Homebrew toolchain (llvm@20, cmake, ninja, libomp, bison)
+#   2. installs the Homebrew toolchain (llvm@20, cmake, ninja, libomp, bison, pkg-config)
 #   3. initialises the `resource` submodule (full-text analyzer dictionaries)
 #   4. clones and bootstraps vcpkg at the baseline pinned in vcpkg.json
 #   5. hands off to build_server.sh, which owns the configure and build
@@ -103,7 +103,10 @@ else
     # macOS ships 2.3 at /usr/bin/bison and vcpkg only warns before using it, so a
     # machine without Homebrew bison fails minutes into the dependency build with
     # "unrecognized option". vcpkg looks in /opt/homebrew/opt/bison/bin on its own.
-    for formula in llvm@20 ninja libomp bison; do
+    # pkg-config: vcpkg's ports call vcpkg_fixup_pkgconfig, which needs a pkg-config
+    # binary and fails on the very first dependency (abseil) without one. Homebrew's
+    # formula is pkgconf; pkg-config is its alias, and `brew list pkg-config` resolves it.
+    for formula in llvm@20 ninja libomp bison pkg-config; do
         if brew list --versions "$formula" >/dev/null 2>&1; then
             info "$formula already installed"
         else
@@ -129,6 +132,8 @@ fi
        Or point LLVM_PREFIX at your own clang 20 install."
 command -v cmake >/dev/null || die "cmake not found; brew install cmake"
 command -v ninja >/dev/null || die "ninja not found; brew install ninja"
+command -v pkg-config >/dev/null || die "pkg-config not found; the vcpkg dependency build needs it:
+         brew install pkg-config"
 
 # vcpkg searches /opt/homebrew/opt/bison/bin and /usr/local/opt/bison/bin before PATH,
 # so check the same places it will, in the same order.

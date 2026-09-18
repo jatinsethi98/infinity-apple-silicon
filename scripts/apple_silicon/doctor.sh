@@ -130,6 +130,12 @@ else
     missing "libomp" "brew install libomp"
 fi
 
+if command -v pkg-config >/dev/null 2>&1; then
+    ok "pkg-config" "$(pkg-config --version) ($(command -v pkg-config))"
+else
+    missing "pkg-config" "brew install pkg-config   (vcpkg's ports need it; the dependency build fails on abseil without it)"
+fi
+
 # vcpkg's thrift port needs bison 3.7+ (it passes --file-prefix-map). macOS ships
 # 2.3 and vcpkg only warns before using it. vcpkg searches the two Homebrew prefixes
 # before PATH, so look in the same places in the same order.

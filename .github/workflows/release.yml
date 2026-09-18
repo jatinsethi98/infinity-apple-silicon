@@ -66,7 +66,7 @@ jobs:
           # llvm@20 specifically: the project hard-fails below clang 20 and needs a
           # libc++ whose module manifest matches. Apple Clang is not usable.
           # bison 3.7+ is required by vcpkg's thrift port; macOS ships 2.3.
-          brew install llvm@20 ninja libomp bison
+          brew install llvm@20 ninja libomp bison pkg-config
           brew install cmake || brew upgrade cmake
           "$LLVM_PREFIX/bin/clang++" --version
           cmake --version

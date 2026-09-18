@@ -50,6 +50,9 @@ llvm_prefix=${LLVM_PREFIX:-/opt/homebrew/opt/llvm@20}
 
 command -v cmake >/dev/null || die "cmake not found — brew install cmake"
 command -v ninja >/dev/null || die "ninja not found — brew install ninja"
+# vcpkg's ports run vcpkg_fixup_pkgconfig, which needs a pkg-config binary; without one
+# the dependency build dies on abseil, the first port, after a page of pkgconfig lines.
+command -v pkg-config >/dev/null || die "pkg-config not found — the vcpkg dependency build needs it: brew install pkg-config"
 
 # vcpkg's thrift port needs bison 3.7+ (it passes --file-prefix-map). macOS ships
 # bison 2.3 and vcpkg only warns before using it, so the failure would otherwise

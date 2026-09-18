@@ -67,7 +67,7 @@ jobs:
           # bison: vcpkg's thrift port needs bison 3.7+ for --file-prefix-map. macOS
           # ships bison 2.3, and vcpkg only warns before using it, so without this the
           # build dies minutes in with "unrecognized option --file-prefix-map".
-          brew install llvm@20 ninja libomp bison
+          brew install llvm@20 ninja libomp bison pkg-config
           # cmake 4.0.3+ is required; the runner image may ship an older one.
           brew install cmake || brew upgrade cmake
           "$LLVM_PREFIX/bin/clang++" --version
