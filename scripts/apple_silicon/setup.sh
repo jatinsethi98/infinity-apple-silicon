@@ -11,7 +11,7 @@
 #
 # What it does, in order, skipping anything already done:
 #   1. checks the host is arm64 macOS with the Xcode command line tools
-#   2. installs the Homebrew toolchain (llvm@20, cmake, ninja, libomp)
+#   2. installs the Homebrew toolchain (llvm@20, cmake, ninja, libomp, bison, pkg-config)
 #   3. initialises the `resource` submodule (full-text analyzer dictionaries)
 #   4. clones and bootstraps vcpkg at the baseline pinned in vcpkg.json
 #   5. hands off to build_server.sh, which owns the configure and build
@@ -31,8 +31,9 @@
 #   --with-tests        also build test_main and install sqllogictest
 #   -h, --help          this message
 #
-# The build itself takes roughly an hour on first run (vcpkg dependencies, then
-# about 1500 C++23 module translation units) and needs ~25 GB of free disk.
+# The build takes about 12 minutes on an M4 Mac mini (six for the vcpkg dependencies,
+# three for about 1500 C++23 module translation units, the rest for the unit tests),
+# longer on older chips, and needs about 20 GB of free disk.
 #
 set -euo pipefail
 
@@ -80,10 +81,11 @@ export SDKROOT=${SDKROOT:-$(xcrun --show-sdk-path)}
 info "macOS $(sw_vers -productVersion) on $(sysctl -n machdep.cpu.brand_string)"
 info "SDKROOT=$SDKROOT"
 
-# ~11 GB of build tree, ~2.5 GB of vcpkg checkout, ~8 GB of vcpkg build trees.
+# Measured on an M4 mini: 11 GB of build tree, 2 GB of vcpkg checkout and build trees,
+# and a few GB for the dictionary submodule, instances and the package; 19 GB in all.
 free_gb=$(df -g . | awk 'NR==2 {print $4}')
-if (( free_gb < 25 )); then
-    info "warning: only ${free_gb} GB free on this volume; the full build needs about 25 GB"
+if (( free_gb < 20 )); then
+    info "warning: only ${free_gb} GB free on this volume; the full build needs about 20 GB"
 fi
 
 # --------------------------------------------------------- 2. Homebrew toolchain
@@ -99,7 +101,14 @@ else
        Or pass --skip-brew if you are providing clang 20, cmake 4.0.3+, ninja and libomp yourself."
     # llvm@20 specifically: the project hard-fails below clang 20 and needs a libc++
     # whose module manifest matches the compiler. Apple Clang cannot build this.
-    for formula in llvm@20 ninja libomp; do
+    # bison: vcpkg's thrift port passes --file-prefix-map, which needs bison 3.7+.
+    # macOS ships 2.3 at /usr/bin/bison and vcpkg only warns before using it, so a
+    # machine without Homebrew bison fails minutes into the dependency build with
+    # "unrecognized option". vcpkg looks in /opt/homebrew/opt/bison/bin on its own.
+    # pkg-config: vcpkg's ports call vcpkg_fixup_pkgconfig, which needs a pkg-config
+    # binary and fails on the very first dependency (abseil) without one. Homebrew's
+    # formula is pkgconf; pkg-config is its alias, and `brew list pkg-config` resolves it.
+    for formula in llvm@20 ninja libomp bison pkg-config; do
         if brew list --versions "$formula" >/dev/null 2>&1; then
             info "$formula already installed"
         else
@@ -125,6 +134,22 @@ fi
        Or point LLVM_PREFIX at your own clang 20 install."
 command -v cmake >/dev/null || die "cmake not found; brew install cmake"
 command -v ninja >/dev/null || die "ninja not found; brew install ninja"
+command -v pkg-config >/dev/null || die "pkg-config not found; the vcpkg dependency build needs it:
+         brew install pkg-config"
+
+# vcpkg searches /opt/homebrew/opt/bison/bin and /usr/local/opt/bison/bin before PATH,
+# so check the same places it will, in the same order.
+bison_bin=""
+for candidate in /opt/homebrew/opt/bison/bin/bison /usr/local/opt/bison/bin/bison "$(command -v bison || true)"; do
+    if [[ -n $candidate && -x $candidate ]]; then bison_bin=$candidate; break; fi
+done
+[[ -n $bison_bin ]] || die "bison not found. The thrift dependency needs bison 3.7 or newer:
+         brew install bison"
+bison_version=$("$bison_bin" --version | head -1 | awk '{print $NF}')
+bison_sortable=$(printf '%s' "$bison_version" | awk -F. '{printf "%d%03d", $1, $2}')
+(( bison_sortable >= 3007 )) \
+    || die "bison $bison_version at $bison_bin is too old; the thrift dependency needs 3.7 or newer.
+       macOS ships 2.3. Install a current one with: brew install bison"
 
 # CMakeLists.txt selects a CMAKE_EXPERIMENTAL_CXX_IMPORT_STD UUID per CMake
 # version and FATAL_ERRORs outside 4.0.3 ... 4.4.x. Check BOTH ends here: too old
@@ -147,6 +172,7 @@ fi
 info "clang: $("$llvm_prefix/bin/clang++" --version | head -1)"
 info "cmake: $cmake_version"
 info "ninja: $(ninja --version)"
+info "bison: $bison_version ($bison_bin)"
 
 # ------------------------------------------------------- 3. resource submodule
 
@@ -229,7 +255,7 @@ fi
 targets=(infinity)
 (( with_tests )) && targets+=(test_main)
 
-step "Building ${targets[*]} (this takes about an hour on first run)"
+step "Building ${targets[*]} (about 12 minutes on an M4; longer on older chips)"
 info "progress is written to build/macos-arm64-release-build.log"
 scripts/apple_silicon/build_server.sh macos-arm64-release "${targets[@]}"
 

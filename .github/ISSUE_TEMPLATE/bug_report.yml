@@ -1,53 +1,65 @@
-name: Bug Report
-description: Create a bug issue for infinity
+name: Bug report
+description: Something in this port does not build, start, or behave on a Mac
 title: "[Bug]: "
 labels: [bug]
 body:
-- type: checkboxes
-  attributes:
-    label: Is there an existing issue for the same bug?
-    description: Please check if an issue already exists for the bug you encountered.
-    options:
-    - label: I have checked the existing issues.
-      required: true
-- type: markdown
-  attributes:
-    value: "Please provide the following information to help us understand the issue."
-- type: input
-  attributes:
-    label: Version or Commit ID
-    description: Enter the name of the branch where you encountered the issue.
-    placeholder: e.g., v0.1.0
-  validations:
-    required: true
-- type: textarea
-  attributes:
-    label: Other environment information
-    description: |
-      Enter the environment details:
+  - type: markdown
+    attributes:
       value: |
-      - Hardware parameters:
-      - OS type:
-      - Others:
-    render: Markdown
-  validations:
-    required: false
-- type: textarea
-  attributes:
-    label: Actual behavior and How to reproduce it
-    description: Describe what you encountered and steps to reproduce what you encountered.
-  validations:
-    required: true
-- type: textarea
-  attributes:
-    label: Expected behavior
-    description: Describe what you expected.
-  validations:
-    required: false
-- type: textarea
-  attributes:
-    label: Additional information
-    description: |
-      Log, error message, or any other information can help find the root cause.
-  validations:
-    required: false
+        Thanks. Two quick checks first:
+        - Is it already in [known issues](https://github.com/jatinsethi98/infinity-apple-silicon/blob/main/docs/known-issues.md)? If so, a thumbs-up there helps more than a duplicate.
+        - Is it about Infinity's engine or SQL semantics rather than the Mac port? Those belong [upstream](https://github.com/infiniflow/infinity/issues/new/choose), where a fix helps every platform.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead. Paste exact error text.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The smallest sequence of commands or SDK calls that shows it.
+      placeholder: |
+        make start
+        uv run python - <<'EOF'
+        ...
+        EOF
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `make doctor`
+      description: Paste it as is. It records macOS, chip, toolchain versions and repo state in one go.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or release
+      description: "`git rev-parse --short HEAD`, or the release tag if you installed a package."
+      placeholder: 886f5a0de
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        For a build failure, the tail of `build/<preset>-build.log`. For a runtime failure, the tail of
+        `build/instances/<name>/log/infinity.log` (checkout) or `<data-dir>/log/infinity.log` (package),
+        and `stdout.log` if the server simply disappeared.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the existing issues and the known-issues page.
+          required: true
+        - label: I am on an Apple Silicon Mac running macOS 14 or newer, in a native (not Rosetta) shell.
+          required: false

@@ -19,7 +19,16 @@
 # all things that can only be validated by running.
 #
 # Usage:
-#   scripts/apple_silicon/make_package.sh [--binary PATH] [--outdir DIR] [--skip-selftest]
+#   scripts/apple_silicon/make_package.sh [--binary PATH] [--outdir DIR] [--version VER]
+#                                         [--require-slt] [--skip-selftest]
+#
+#   --version VER   name the package after a release (e.g. 0.7.3-apple.2) rather than
+#                   the engine version in vcpkg.json, so successive releases of the same
+#                   engine unpack side by side instead of over one another. The engine
+#                   version inside the config is unaffected.
+#   --require-slt   fail the self-test if sqllogictest is not installed, instead of
+#                   verifying startup only. CI passes this so the query check cannot be
+#                   skipped silently.
 #
 set -euo pipefail
 
@@ -29,13 +38,17 @@ cd "$repo_root"
 binary="build/macos-arm64-release/src/infinity"
 outdir="build/package"
 selftest=1
+package_version=""
+require_slt=0
 
 while (( $# )); do
     case "$1" in
         --binary) binary=${2:?--binary needs a path}; shift ;;
         --outdir) outdir=${2:?--outdir needs a path}; shift ;;
         --skip-selftest) selftest=0 ;;
-        -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --version) package_version=${2:?--version needs a version}; shift ;;
+        --require-slt) require_slt=1 ;;
+        -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) printf 'error: unknown argument %s\n' "$1" >&2; exit 2 ;;
     esac
     shift
@@ -73,8 +86,10 @@ arch=$(lipo -archs "$binary")
 
 version=$(sed -n 's/^ *"version" *: *"\([^"]*\)".*/\1/p' vcpkg.json | head -1)
 [[ -n $version ]] || die "could not read version from vcpkg.json"
+package_version=${package_version:-$version}
+[[ $package_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "--version '$package_version' is not a safe file name component"
 
-name="infinity-${version}-macos-arm64"
+name="infinity-${package_version}-macos-arm64"
 stage="$outdir/$name"
 tarball="$outdir/${name}.tar.gz"
 
@@ -190,7 +205,7 @@ EOF
 chmod 0755 "$stage/bin/infinity"
 
 cat >"$stage/README.md" <<EOF
-# Infinity $version — macOS arm64
+# Infinity $package_version — macOS arm64 (engine $version)
 
 A relocatable build. Unpack it anywhere; nothing needs to be installed and no step
 needs root.
@@ -220,7 +235,11 @@ EOF
 log "creating $tarball"
 tar -czf "$tarball" -C "$outdir" "$name"
 size=$(du -h "$tarball" | cut -f1)
-log "packaged $tarball ($size)"
+# A checksum beside the tarball, in `shasum -a 256` format, so install.sh and anyone
+# downloading by hand can verify the asset. A release asset can be replaced after
+# publication without the tag moving; the checksum is what makes that detectable.
+(cd "$outdir" && shasum -a 256 "${name}.tar.gz" >"${name}.tar.gz.sha256")
+log "packaged $tarball ($size); checksum in ${tarball}.sha256"
 
 # ------------------------------------------------------------------- self-test
 
@@ -294,15 +313,18 @@ SELECT COUNT(*) FROM pkg_probe;
 1
 
 query T
-SELECT body FROM pkg_probe SEARCH MATCH TEXT ('body', '清华大学', 'topn=5;bm25_params=1.2,0.75');
+SELECT body FROM pkg_probe SEARCH MATCH TEXT ('body', '清华大学', 'topn=5;bm25_param_k1=1.2;bm25_param_b=0.75');
 ----
 我来到北京清华大学
 SLT
     # The chinese analyzer is the load-bearing check: it only works if the packaged
-    # resource/ tree was found through the relocated prefix. bm25_params exercises
-    # the float option parsing at the same time.
+    # resource/ tree was found through the relocated prefix. bm25_param_k1 and
+    # bm25_param_b exercise the float option parsing at the same time; they must be
+    # spelled exactly so, because an unknown option name is silently ignored.
     "$slt" -p "$port" "$scratch/probe.slt" >&2 || die "self-test query failed"
     log "self-test PASSED: packaged CJK full-text + BM25 options work from the relocated install"
+elif (( require_slt )); then
+    die "self-test: sqllogictest is not installed and --require-slt was given; run scripts/apple_silicon/install_test_tools.sh"
 else
     log "self-test: sqllogictest not present, verified startup only"
     log "  run scripts/apple_silicon/install_test_tools.sh for the query check"

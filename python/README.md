@@ -1,69 +1,44 @@
-# python-infinity
+# Python
 
-# update python client
+What is in this directory and how it relates to the server you build from this
+repository.
 
-- Update "version" field of [project] chapter and client_version field of ConnectRequest message.
-- build new python SDK
-- upload to pypi.org
-- install new python SDK
+| Path | What it is |
+|---|---|
+| `infinity_sdk/` | The `infinity` package: the client SDK, published on PyPI as `infinity-sdk`. |
+| `test_pysdk/` | Upstream's SDK test corpus. Much of it hardcodes `/var/infinity/test_data`, which is not creatable without root on macOS; the suites that pass natively are in `../test/eval_macos/`. |
+| `parallel_test/`, `restart_test/`, `test_cluster/` | Upstream's concurrency, restart and cluster drivers. `parallel_test` passes on macOS; `test_cluster` is untested here. |
+| `benchmark/` | Upstream's comparisons against Elasticsearch and Qdrant on Linux. Not maintained in this fork; the Apple Silicon benchmarks live in `../scripts/bench/`. |
+| `infinity_embedded/` | Upstream's embedded (in-process) client. **Not functional in this fork**: the native extension it needs is not built, and `infinity.connect()` accepts only a network address. |
 
-Please see [releases.yml](https://github.com/infiniflow/infinity/blob/main/.github/workflows/release.yml) for details.
+## Using the SDK
 
-# using
+```sh
+pip install infinity-sdk            # the published wheel works against this server
+# or, from a checkout, into the repo's virtualenv:
+uv sync --python 3.11 --all-extras  # make sdk
+```
 
 ```python
 import infinity
-from infinity.common import LOCAL_HOST
-from infinity.common import ConflictType
+from infinity.common import ConflictType, NetworkAddress
 
-infinity_obj = infinity.connect(LOCAL_HOST)
-db = infinity_obj.get_database("default_db")
-db.drop_table("my_table", ConflictType.Ignore)
-table = db.create_table("my_table", {"num": {"type": "integer"}, "body": {"type": "varchar"}, "vec": {"type": "vector,5,float"}}, ConflictType.Error)
-table.insert([{"num": 1, "body": "undesirable, unnecessary, and harmful", "vec": [1.0] * 5}])
-table.insert([{"num": 2, "body": "publisher=US National Office for Harmful Algal Blooms", "vec": [4.0] * 5}])
-table.insert([{"num": 3, "body": "in the case of plants, growth and chemical", "vec": [7.0] * 5}])
-
-res = table.output(["*"]).match_dense("vec", [3.0] * 5, "float", "ip", 2).to_pl()
-print(res)
-
+conn = infinity.connect(NetworkAddress("127.0.0.1", 23817))
+db = conn.get_database("default_db")
 ```
 
-# For developer
-```shell
-pip install -e .
-```
-Build infinity-sdk 
-```shell
-pip install ./python/infinity_sdk 
-```
-Build the release version of infinity-embedded-sdk in the target location `cmake-build-release`
-```shell
-pip install . -v --config-settings=cmake.build-type="Release"  --config-settings=build-dir="cmake-build-release"
-```
-Build the debug version of infinity-embedded-sdk in the target location `cmake-build-debug`
-```shell
-pip install . -v --config-settings=cmake.build-type="Debug"  --config-settings=build-dir="cmake-build-debug"
-```
-Note: If you run with the release version and turn jemalloc compile flag on, you must set environment variable, for example
-```shell
-LD_PRELOAD=$(ldconfig -p | grep 'libjemalloc.so ' | awk '{print $4}') python3 example/simple_example.py
-```
-Note: If you run with the debug version, you must set the **libasan** environment variable, for example
-```shell
-LD_PRELOAD=$(find $(clang-18 -print-resource-dir) -name "libclang_rt.asan-x86_64.so") python3 example/simple_example.py
-```
-Note: When running with the debug version infinity_embedded-sdk, you may find some memory leaks caused by arrow. You can use `ASAN_OPTIONS=detect_leaks=0` to disable memory leak detection, for example
-```shell
-LD_PRELOAD=$(find $(clang-18 -print-resource-dir) -name "libclang_rt.asan-x86_64.so") ASAN_OPTIONS=detect_leaks=0 python3 example/simple_example.py
-```
+The [Python guide](../docs/guides/python.md) walks through tables, indexes and search;
+the [SDK reference](../docs/references/pysdk_api_reference.md) lists every call.
 
-# run pysdk test
-Run a local infinity test in project root directory
-```shell
-pytest --local-infinity python/test/cases/test_basic.py::TestInfinity::test_basic
-```
-Run a remote infinity test in project root directory
-```shell
-pytest python/test/cases/test_basic.py::TestInfinity::test_basic
-```
+## Differences from upstream's copy
+
+One: `infinity/rag_tokenizer.py` finds its dictionary (`huqie.txt`) in the
+repository's `resource/rag/` when running from a checkout, and caches the compiled
+trie under `~/.cache/infinity` instead of writing next to the dictionary inside the
+submodule. Everything else is upstream 0.7.3.
+
+## Publishing
+
+The SDK's version is in the root `pyproject.toml` and the `client_version` handshake
+in `infinity/remote_thrift/client.py`; both must move together. This fork does not
+publish to PyPI; the upstream wheel is protocol-compatible with the server here.

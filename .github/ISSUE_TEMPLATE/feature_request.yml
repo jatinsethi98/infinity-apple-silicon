@@ -1,46 +1,38 @@
 name: Feature request
-description: Propose a feature request for infinity.
-title: "[Feature Request]: "
-labels: [feature request]
+description: Propose something for the Mac port, its tooling or its docs
+title: "[Feature]: "
+labels: [enhancement]
 body:
-  - type: checkboxes
+  - type: dropdown
+    id: scope
     attributes:
-      label: Is there an existing issue for the same feature request?
-      description: Please check if an issue already exists for the feature you request.
+      label: What is this about?
+      description: Engine and SQL features belong upstream, where they help every platform; this repository is the port, its scripts, packaging, benchmarks and documentation.
       options:
-        - label: I have checked the existing issues.
-          required: true
-  - type: textarea
-    attributes:
-      label: Is your feature request related to a problem?
-      description: |
-        A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
-      render: Markdown
-    validations:
-      required: false
-  - type: textarea
-    attributes:
-      label: Describe the feature you'd like
-      description: A clear and concise description of what you want to happen.
+        - The Mac port, build, packaging or scripts
+        - Benchmarks or performance on Apple Silicon
+        - Documentation, demo or examples
+        - Infinity's engine or SQL (I will file upstream if you say so)
+        - Not sure
     validations:
       required: true
   - type: textarea
+    id: problem
     attributes:
-      label: Describe implementation you've considered
-      description: A clear and concise description of implementation you've considered or investigated.
+      label: The problem
+      description: What you are trying to do and what gets in the way today.
     validations:
-      required: false
+      required: true
   - type: textarea
+    id: proposal
     attributes:
-      label: Documentation, adoption, use case
-      description: If you can, explain some scenarios how users might use this, situations it would be helpful in. Any API designs, mockups, or diagrams are also helpful.
-      render: Markdown
+      label: What you would like
+      description: The behaviour, command, page or number you want to exist. Alternatives you considered are welcome.
     validations:
-      required: false
-  - type: textarea
+      required: true
+  - type: checkboxes
+    id: help
     attributes:
-      label: Additional information
-      description: |
-        Add any other context or screenshots about the feature request here.
-    validations:
-      required: false
+      label: Contribution
+      options:
+        - label: I would be willing to open a pull request for this.

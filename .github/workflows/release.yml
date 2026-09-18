@@ -65,10 +65,12 @@ jobs:
           set -eux
           # llvm@20 specifically: the project hard-fails below clang 20 and needs a
           # libc++ whose module manifest matches. Apple Clang is not usable.
-          brew install llvm@20 ninja libomp
+          # bison 3.7+ is required by vcpkg's thrift port; macOS ships 2.3.
+          brew install llvm@20 ninja libomp bison pkg-config
           brew install cmake || brew upgrade cmake
           "$LLVM_PREFIX/bin/clang++" --version
           cmake --version
+          /opt/homebrew/opt/bison/bin/bison --version | head -1
 
       - name: Resolve the pinned vcpkg baseline
         id: baseline
@@ -123,17 +125,31 @@ jobs:
           test -x build/macos-arm64-release/src/infinity
           df -h . | tail -1
 
+      - name: Install sqllogictest
+        # The package self-test's query check needs it; without it the check silently
+        # degrades to "the server started". --require-slt below makes that fatal.
+        run: scripts/apple_silicon/install_test_tools.sh
+
       - name: Package and self-test the tarball
         # make_package.sh extracts the tarball to a scratch directory, starts the
         # server out of it and runs a query. An artifact that has never been started
-        # is not an artifact that works, so this is the release gate.
-        run: scripts/apple_silicon/make_package.sh
+        # is not an artifact that works, so this is the release gate. For a tag the
+        # package is named after the tag (v0.7.3-apple.2 -> infinity-0.7.3-apple.2-...),
+        # so successive releases of the same engine version install side by side.
+        run: |
+          set -eux
+          case "$GITHUB_REF" in
+            refs/tags/v*) scripts/apple_silicon/make_package.sh --require-slt --version "${GITHUB_REF_NAME#v}" ;;
+            *)            scripts/apple_silicon/make_package.sh --require-slt ;;
+          esac
 
       - name: Upload the package as a build artifact
         uses: actions/upload-artifact@v4
         with:
           name: infinity-macos-arm64
-          path: build/package/*.tar.gz
+          path: |
+            build/package/*.tar.gz
+            build/package/*.tar.gz.sha256
           retention-days: 14
           if-no-files-found: error
 
@@ -145,4 +161,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: build/package/*.tar.gz
+          files: |
+            build/package/*.tar.gz
+            build/package/*.tar.gz.sha256

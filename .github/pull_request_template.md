@@ -1,28 +1,24 @@
-### Summary
+## What this changes
 
-<!-- What changes, and why. If it fixes an issue, link it. -->
+<!-- One paragraph: the problem, and what this does about it. Link the issue if there is one. -->
 
-### Verification
+## How it was verified
 
-<!-- Delete what does not apply. Say what you actually ran, not what should pass. -->
+<!-- Tick what you ran. A macOS CI run is about an hour, so local checks first. -->
 
-- [ ] `scripts/apple_silicon/build_server.sh macos-arm64-release infinity test_main`
-- [ ] `./build/macos-arm64-release/src/test_main`
-- [ ] `uv run python scripts/apple_silicon/run_slt.py` (against a `--fresh` server)
-- [ ] New test covering the change — for a crash fix, the call that used to crash
+- [ ] `make lint` (shell syntax, shellcheck, Markdown links)
+- [ ] `make build-tests` and `make test` pass, with only the five documented exclusions failing
+- [ ] `make slt` passes (if the change touches the engine, SQL, or the test drivers)
+- [ ] `make recovery` passes (if the change touches storage, the WAL or startup)
+- [ ] `make package` self-test passes (if the change touches packaging or the launcher)
+- [ ] Any script under `scripts/apple_silicon/` that I changed, I ran
 
-Machine: <!-- e.g. M3 Pro, macOS 15.3, clang 20.1.8, cmake 4.4.2 -->
+## If this claims a performance change
 
-### Performance claims
+- [ ] Measured with `scripts/bench/ab_build.py` in randomized paired blocks, not a single run
+- [ ] Recall scored against the official ground truth and compared at matched recall
+- [ ] Result recorded in `docs/apple_silicon/BENCHMARKS.md` with raw output under `docs/apple_silicon/benchmarks/`
 
-<!-- Only if this PR claims a speedup. Otherwise delete this section.
-     scripts/bench/README.md has the contract: alternating paired runs, recall against
-     the official ground truth, comparison at MATCHED RECALL rather than matched
-     parameters. Record the result in docs/apple_silicon/BENCHMARKS.md with raw output
-     under docs/apple_silicon/benchmarks/. -->
+## Documentation
 
-### Notes for the reviewer
-
-<!-- Anything non-obvious: a workaround and what would let it be removed, a platform
-     assumption, a deliberate omission. This is the part that is expensive to
-     reconstruct later. -->
+- [ ] Docs, `CHANGELOG.md` and `docs/known-issues.md` updated where the change affects them, or not applicable

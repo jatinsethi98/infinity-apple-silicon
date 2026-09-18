@@ -25,7 +25,7 @@ rather than documenting it as a gotcha.
 | Bulk import | Working | `dml/import` 27/27, `dml/export` 5/5 |
 | Crash recovery (process death) | Working | `verify_crash_recovery.sh --rows 2000`; `EVALUATION.md` extends this to power-loss-safe fsync, and to corrupt-WAL handling, which is **broken** |
 | Packaging | Working, self-tested | `make_package.sh` → 128 MB relocatable tarball |
-| macOS CI | Written, **never executed** | `.github/workflows/macos_arm64.yml` |
+| macOS CI | **Green** on a hosted `macos-15` runner, 2026-09-18 (run 35317365990, 50 min): build, unit tests, SQL suite, crash recovery, package self-test | `.github/workflows/macos_arm64.yml` |
 | Linux x86-64 / ARM64 | **Removed** | `CMakeLists.txt` refuses a non-Darwin host before `project()`; use [upstream](https://github.com/infiniflow/infinity) |
 | HTTP API, cluster mode | **Not tested** | see "Not covered" |
 
@@ -213,9 +213,11 @@ Stated plainly so the summary table is not read as more than it is.
   float parse (previously Apple-only, now shared), the two test-harness fixes, and the
   unit-test resource resolver, which probes the installed path first specifically so
   Linux CI resolves as before.
-- **The macOS CI workflow has never run.** Every command in it was run by hand here,
-  but runner-specific behaviour — disk limits, Homebrew drift, cache restore — is
-  unproven. Treat the first green run as the point at which it becomes a gate.
+- **The macOS CI workflow is now a gate.** Its first two hosted runs failed and each
+  found a real portability defect: the runner image has no Homebrew bison (vcpkg's
+  thrift port needs 3.7+), and `Value::StringToValue` referenced a libc++-library
+  `from_chars` symbol the runner's Xcode 16.4 SDK does not export. Both are fixed, and
+  run 35317365990 (2026-09-18) passed every step on a `macos-15` runner in 50 minutes.
 - **Python wheel.** The configured wheel is the pure-Python remote SDK; the native
   embedded module is outside package discovery. No arm64 embedded wheel is produced,
   and the packaged tarball is the shipping artifact instead.

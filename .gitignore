@@ -11,6 +11,7 @@
 !ports/*/usage
 !LICENSE
 !NOTICE
+!Makefile
 
 # names with special characters
 *#*
@@ -159,8 +160,6 @@ dist/
 python/infinity_sdk/infinity_sdk.egg-info/
 minio/
 
-# not ignore Dockerfile
-!Dockerfile*
 
 vcpkg_installed/
 

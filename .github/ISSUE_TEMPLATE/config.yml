@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/jatinsethi98/infinity-apple-silicon/discussions
+    about: How do I, why does it, is it possible. Discussions are the place; issues are for defects and proposals.
+  - name: Infinity engine, SQL or SDK feature
+    url: https://github.com/infiniflow/infinity/issues/new/choose
+    about: Anything about the database itself rather than the Mac port belongs upstream, where a fix helps every platform.
+  - name: Security vulnerability
+    url: https://github.com/jatinsethi98/infinity-apple-silicon/security/advisories/new
+    about: Report privately. See SECURITY.md for what is in scope and what is already public.
