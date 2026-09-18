@@ -84,7 +84,7 @@ jobs:
           echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
 
       - name: Cache vcpkg binary archives
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
           # Keyed on the manifest and the baseline: those two determine every
