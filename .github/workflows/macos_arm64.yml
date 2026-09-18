@@ -163,7 +163,7 @@ jobs:
         run: scripts/apple_silicon/install_test_tools.sh
 
       - name: Set up Python for the test drivers
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
