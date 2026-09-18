@@ -45,7 +45,7 @@ jobs:
 
     steps:
       - name: Check out, including the resource submodule
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # resource/ is a submodule holding the full-text analyzer dictionaries.
           # Without it the analyzer tests fail and a package would ship broken CJK
