@@ -2731,7 +2731,7 @@ curl --request GET \
     - If you set `"fusion_method"` to `"max"`, use a separate JSON to set the following parameter:
       - `"normalize"`: Specifies the normalization method for each retrieval way. Options: `"minmax"`, `"atan"`, `"l2"`, `"none"`. Defaults to `"minmax"`.
     - If you set `"fusion_method"` to `"match_tensor"`, use a separate JSON to set the following parameters:  
-      - `"fields"`: The name of the tensor column for reranking.
+      - `"field"`: The name of the tensor column for reranking. (Singular: the parameters are handed to the tensor-search parser, which accepts `field`, not `fields`.)
       - `"query_tensor"`: The tensor data to compare against. This should be provided as a list of lists of numerical values.
       - `"element_type"`: The element data type of the query tensor. Usually `"float"`.
 

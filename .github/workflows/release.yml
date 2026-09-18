@@ -125,11 +125,23 @@ jobs:
           test -x build/macos-arm64-release/src/infinity
           df -h . | tail -1
 
+      - name: Install sqllogictest
+        # The package self-test's query check needs it; without it the check silently
+        # degrades to "the server started". --require-slt below makes that fatal.
+        run: scripts/apple_silicon/install_test_tools.sh
+
       - name: Package and self-test the tarball
         # make_package.sh extracts the tarball to a scratch directory, starts the
         # server out of it and runs a query. An artifact that has never been started
-        # is not an artifact that works, so this is the release gate.
-        run: scripts/apple_silicon/make_package.sh
+        # is not an artifact that works, so this is the release gate. For a tag the
+        # package is named after the tag (v0.7.3-apple.2 -> infinity-0.7.3-apple.2-...),
+        # so successive releases of the same engine version install side by side.
+        run: |
+          set -eux
+          case "$GITHUB_REF" in
+            refs/tags/v*) scripts/apple_silicon/make_package.sh --require-slt --version "${GITHUB_REF_NAME#v}" ;;
+            *)            scripts/apple_silicon/make_package.sh --require-slt ;;
+          esac
 
       - name: Upload the package as a build artifact
         uses: actions/upload-artifact@v4

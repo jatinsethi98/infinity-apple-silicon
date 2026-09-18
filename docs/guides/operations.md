@@ -75,10 +75,19 @@ The evaluation suites in `test/eval_macos/` use this to run eighteen servers at 
 
 ## Configuration
 
-The wrapper renders `build/instances/<name>/infinity_conf.toml` from the shipped
-`conf/infinity_conf.toml` on every start, so edit the shipped file to change a default
-for all instances, or pass `--binary` and a hand-written `-f config.toml` for a one-off.
-The keys that matter operationally:
+The wrapper writes `build/instances/<name>/infinity_conf.toml` on every start from a
+template inside `run_server.sh`, with the instance's ports and directories filled in,
+so edits to the rendered file are overwritten. To change a default for every instance,
+edit the template in the script. For a one-off, copy the rendered file, change it, and
+start with it:
+
+```sh
+scripts/apple_silicon/run_server.sh start --config my.toml --port-offset 0
+```
+
+`--port-offset` must still describe the ports inside your file, because `status` and
+the readiness probe use it. The shipped `conf/infinity_conf.toml` is upstream's Linux
+layout and is not read on macOS. The keys that matter operationally:
 
 | Key | Default | Meaning |
 |---|---|---|

@@ -20,7 +20,6 @@ export SDKROOT ?= $(shell xcrun --show-sdk-path 2>/dev/null)
 # Threads for the benchmark. The published table used 10 (a 10-core M4); your own
 # core count gives your machine's number rather than a comparison against the table.
 PARTICIPANTS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 8)
-FAISS_BIN    := $(shell [ -x build/bench-faiss-src/faiss_hnsw_d0 ] && echo build/bench-faiss-src/faiss_hnsw_d0 || echo build/bench/faiss_hnsw_d0)
 
 .PHONY: help doctor setup build build-tests start stop status restart logs demo sdk \
         test slt recovery eval package bench-build bench-faiss bench-datasets bench \
@@ -100,13 +99,14 @@ bench-datasets: ## Download SIFT1M into ./datasets (168 MB)
 
 bench: ## Paired Infinity vs FAISS run on SIFT1M (about 15 minutes)
 	@test -x build/bench/infinity_hnsw_d0 || { echo "harness not built; run: make bench-build"; exit 1; }
+	@test -x build/bench-faiss-src/faiss_hnsw_d0 || { echo "the Accelerate-linked FAISS reference is not built; run: make bench-faiss"; echo "(the Homebrew FAISS in build/bench is 1.5x slower and would flatter Infinity, so it is never used here)"; exit 1; }
 	@test -f datasets/sift1m/base.f32 || { echo "dataset missing; run: make bench-datasets"; exit 1; }
 	@HNSW_D0_EXTERNAL_QUERIES=$$PWD/datasets/sift1m/query.f32 \
 	 HNSW_D0_EXTERNAL_GROUNDTRUTH=$$PWD/datasets/sift1m/groundtruth.i32 \
 	 python3 scripts/bench/run_baseline.py \
 	   --dataset datasets/sift1m/base.f32 --n 1000000 --d 128 --m 32 --efc 200 \
 	   --ef 32,64,128,256 --participants $(PARTICIPANTS) --pairs 2 \
-	   --infinity-bin build/bench/infinity_hnsw_d0 --faiss-bin $(FAISS_BIN)
+	   --infinity-bin build/bench/infinity_hnsw_d0 --faiss-bin build/bench-faiss-src/faiss_hnsw_d0
 
 ##@ Housekeeping
 lint: ## Shellcheck the scripts and check every relative link in the Markdown

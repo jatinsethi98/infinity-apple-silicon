@@ -7,9 +7,10 @@ run against the server as written; the complete endpoint list is in the
 
 Conventions that trip people up:
 
-- A **read is a `GET` with a JSON body**. Some HTTP clients refuse to send one;
-  `curl --request GET --data '...'` does, and so do `requests` and `fetch` when you set
-  the method explicitly.
+- A **read is a `GET` with a JSON body**. Some HTTP clients refuse to send one:
+  `curl --request GET --data '...'` and Python's `requests` do; a browser's `fetch`
+  cannot, because the Fetch standard rejects a body on GET, so a web page needs a small
+  proxy that turns its POST into the engine's GET.
 - Every response is JSON with an `error_code`. `0` is success. A non-zero code comes
   with an `error_msg`.
 - Send `content-type: application/json`.
@@ -134,7 +135,7 @@ Search arm fields:
 | key | meaning |
 |---|---|
 | `match_method` | `dense`, `sparse`, `text` or `tensor` |
-| `fields` | the column (dense, sparse, tensor) or comma-separated columns with optional `^weight` (text) |
+| `fields` | the column (dense, sparse) or comma-separated columns with optional `^weight` (text); a tensor arm uses the singular key `field` |
 | `query_vector`, `matching_text`, `query_tensor` | the query, per method |
 | `element_type`, `metric_type` | for dense: the vector element type and `cosine`, `ip` or `l2` |
 | `topn` | candidates this arm contributes |

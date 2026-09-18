@@ -1636,12 +1636,18 @@ uint64_t Value::Hash() const {
 // 14.0 deployment target. strtof and strtod are in libSystem on every supported macOS.
 //
 // The checks keep from_chars' contract: the whole string must be one decimal number,
-// no leading whitespace or '+' (strtod accepts both), no hex form, and a value outside
-// the type's range is an error rather than silently +/-inf or 0.
+// no leading whitespace or '+' (strtod accepts both), no hexadecimal form, overflow and
+// underflow-to-zero are errors, and a nonzero subnormal is a valid value.
 template <typename T>
 static bool ParseFloatingPoint(const std::string &str, T &out) {
-    if (str.empty() || std::isspace(static_cast<unsigned char>(str.front())) != 0 || str.front() == '+' ||
-        str.find_first_of("xX") != std::string::npos) {
+    if (str.empty() || std::isspace(static_cast<unsigned char>(str.front())) != 0 || str.front() == '+') {
+        return false;
+    }
+    // from_chars' general format has no hexadecimal form and strtod's does. Reject the
+    // "0x" prefix itself, not any 'x': "nan(x)" is a valid NaN spelling in both.
+    const std::size_t first_digit = (str.front() == '-') ? 1 : 0;
+    if (str.size() > first_digit + 1 && str[first_digit] == '0' &&
+        (str[first_digit + 1] == 'x' || str[first_digit + 1] == 'X')) {
         return false;
     }
     errno = 0;
@@ -1651,7 +1657,17 @@ static bool ParseFloatingPoint(const std::string &str, T &out) {
     } else {
         out = std::strtod(str.c_str(), &end);
     }
-    return end == str.c_str() + str.size() && errno != ERANGE;
+    if (end != str.c_str() + str.size()) {
+        return false;
+    }
+    // strtod reports ERANGE for three cases that from_chars treats differently: overflow
+    // (the result is +/-inf) and underflow all the way to zero are out of range, but a
+    // nonzero subnormal is a correctly rounded, representable value and libc++ reports
+    // success for it. On macOS strtod sets ERANGE for that third case too.
+    if (errno == ERANGE) {
+        return std::isfinite(out) && out != 0;
+    }
+    return true;
 }
 
 Value Value::StringToValue(const std::string &str, const DataType &data_type) {

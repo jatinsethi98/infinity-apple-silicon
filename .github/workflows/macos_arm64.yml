@@ -184,7 +184,10 @@ jobs:
         run: scripts/apple_silicon/verify_crash_recovery.sh --rows 2000
 
       - name: Package and self-test the tarball
-        run: scripts/apple_silicon/make_package.sh
+        # --require-slt: sqllogictest was installed above, so the query half of the
+        # self-test must run; without the flag a missing tool degrades it to a
+        # startup check without failing.
+        run: scripts/apple_silicon/make_package.sh --require-slt
 
       - name: Upload the package
         uses: actions/upload-artifact@v4

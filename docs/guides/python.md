@@ -92,8 +92,11 @@ by the server process, not the client:
 ```python
 table.import_data("/absolute/path/articles.jsonl", {"file_type": "jsonl"})
 table.import_data("/absolute/path/articles.csv",   {"file_type": "csv", "header": True, "delimiter": ","})
-table.import_data("/absolute/path/articles.parquet", {"file_type": "parquet"})
 ```
+
+The SDK accepts `csv`, `json`, `jsonl`, `fvecs`, `csr` and `bvecs`. Parquet appears in
+the upstream reference but the SDK's file-type mapping does not include it and
+raises `IMPORT_FILE_FORMAT_ERROR` before reaching the server.
 
 ## Index
 
@@ -199,7 +202,6 @@ rows, _ = (table.output(["id", "title", "category", "year", "score()"])
 |---|---|---|
 | `rrf` | merges by rank; needs no tuning | `{"rank_constant": 60}` |
 | `weighted_sum` | normalizes each arm's scores and sums them with weights | `{"weights": "1,2", "normalize": "minmax"}` |
-| `max` | takes the best normalized score across arms | `{"normalize": "minmax"}` |
 | `match_tensor` | reranks with a tensor column (late interaction) | `{"field": "tensor", "query_tensor": [[...]], "element_type": "float"}` |
 
 The `filter` applies to every arm and is evaluated inside the search, so `topn=5`
@@ -251,7 +253,7 @@ file paths without sanitization, so only ever pass a plain name
 
 ## Errors
 
-Failures raise `infinity.errors.InfinityException` with `error_code` and `error_msg`.
+Failures raise `infinity.InfinityException` with `error_code` and `error_msg`.
 Calls that return a status object instead expose the same two fields; check
 `error_code == 0`. Note that some bad inputs are accepted silently rather than raising
 (see the insert section), which is the opposite of what a database should do and is

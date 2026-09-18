@@ -76,7 +76,10 @@ def markdown_files(args: list[str]) -> list[Path]:
         out: list[Path] = []
         for a in args:
             p = Path(a)
-            out.extend(sorted(p.rglob("*.md")) if p.is_dir() else [p])
+            if p.is_dir():
+                out.extend(sorted(f for f in p.rglob("*") if f.suffix in (".md", ".mdx")))
+            else:
+                out.append(p)
         return out
     files: list[Path] = []
     for root, dirs, names in os.walk(REPO):

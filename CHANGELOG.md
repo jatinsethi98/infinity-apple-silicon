@@ -18,6 +18,13 @@ not here. Versions will follow `v0.7.3-apple.N` until the port and upstream conv
   publishes both.
 - A `demo/rag_quickstart.py` that chunks, embeds, stores and hybrid-retrieves any set
   of text files, printing a ready-to-send prompt.
+- `run_server.sh --config FILE` starts an instance from a config you wrote.
+  `make_package.sh --version` names the tarball after the release tag, so
+  `install.sh` keeps successive releases side by side; `--require-slt` makes the
+  package self-test's query check mandatory, and CI passes it. The probe's BM25
+  options were misspelled (`bm25_params`) and silently ignored; corrected.
+- `make bench` refuses to run without the Accelerate-linked FAISS reference instead
+  of silently falling back to the Homebrew build that flatters Infinity.
 
 ### Documentation
 
@@ -31,6 +38,11 @@ not here. Versions will follow `v0.7.3-apple.N` until the port and upstream conv
   report and 2024 release notes, which described a platform this fork does not build.
 - `scripts/check_md_links.py` checks every relative link and anchor; it runs under
   `make lint` and in CI.
+- Corrections from an adversarial review of the guides: Parquet import and `max`
+  fusion are not in the Python SDK; a tensor search arm over HTTP uses the key
+  `field`; browser `fetch` cannot send the GET-with-body reads; the exception class
+  is `infinity.InfinityException`; and the configuration section of the operations
+  guide now describes what `run_server.sh` actually does.
 
 ### Engine
 

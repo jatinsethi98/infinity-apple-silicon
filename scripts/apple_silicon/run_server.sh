@@ -28,6 +28,9 @@
 #                     against surviving state (see do_start).
 #   --foreground      run in the foreground instead of detaching
 #   --binary PATH     server binary (default: build/macos-arm64-release/src/infinity)
+#   --config FILE     start with this config instead of the rendered one. The wrapper
+#                     still derives ports from --port-offset for its readiness probe
+#                     and status, so pass the offset that matches the file.
 #   --wal-flush MODE  WAL durability: full_fsync (default, power-loss safe, ~2.3ms/sync)
 #                     | fsync (OS-crash safe, ~28us) | no_sync (~1.5us, unsafe)
 #
@@ -42,6 +45,7 @@ port_offset=0
 fresh=0
 foreground=0
 binary="build/macos-arm64-release/src/infinity"
+config=""
 # full_fsync matches the shipped default, so a development instance exercises the same
 # durability path users get. Override with --wal-flush no_sync when benchmarking, where
 # a ~2.3 ms device flush per commit batch would dominate the measurement.
@@ -55,6 +59,7 @@ while (( $# )); do
         --fresh) fresh=1 ;;
         --foreground) foreground=1 ;;
         --binary) binary=${2:?--binary needs a path}; shift ;;
+        --config) config=${2:?--config needs a path}; shift ;;
         --wal-flush) wal_flush=${2:?--wal-flush needs a mode}; shift ;;
         -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) printf 'error: unknown argument %s\n' "$1" >&2; exit 2 ;;
@@ -251,7 +256,16 @@ do_start() {
         rm -rf "$inst_root"
     fi
 
-    write_config
+    if [[ -n $config ]]; then
+        [[ -f $config ]] || die "no config file at $config"
+        # Absolute, because the server is started from the repository root and the
+        # user may have passed a relative path.
+        conf=$(cd -- "$(dirname -- "$config")" && pwd)/$(basename -- "$config")
+        mkdir -p "$inst_root"
+        log "using $conf as given; --port-offset $port_offset must match the ports in it"
+    else
+        write_config
+    fi
 
     if (( foreground )); then
         log "starting in foreground: $binary -f $conf"
