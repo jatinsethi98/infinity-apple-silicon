@@ -35,7 +35,7 @@ help: ## Show this list
 doctor: ## Check prerequisites; changes nothing
 	@$(SCRIPTS)/doctor.sh
 
-setup: ## Install the toolchain, fetch dependencies and build the server (about an hour)
+setup: ## Install the toolchain, fetch dependencies and build the server (10 to 15 minutes on an M4)
 	@$(SCRIPTS)/setup.sh
 
 build: ## Rebuild the server after a code change

@@ -31,7 +31,7 @@ server is down.
 ```sh
 git clone --recurse-submodules https://github.com/<you>/infinity-apple-silicon.git
 cd infinity-apple-silicon
-make doctor && make setup            # once; about an hour
+make doctor && make setup            # once; 10 to 15 minutes on an M4
 git checkout -b my-change
 # ... work ...
 make lint                            # shell syntax, shellcheck, Markdown links

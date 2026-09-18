@@ -41,10 +41,12 @@ per second in-process at 128 dimensions, and about 5,000 of each at 768 dimensio
 The [README table](../README.md#benchmarks) and
 [BENCHMARKS.md](apple_silicon/BENCHMARKS.md) state every parameter behind those numbers.
 
-**Why does the build take an hour?**
-It compiles about 1,500 C++23 module translation units plus thirty vcpkg
-dependencies, single-machine. A prebuilt package from the releases page avoids it
-entirely; `install.sh` fetches and verifies one.
+**How long does the build take?**
+About 12 minutes on an M4 Mac mini, measured: six for the thirty vcpkg dependencies,
+three for the engine's 1,500 C++23 module units, two and a half for the unit-test
+binary. Older chips and slow networks take longer, and the 3-core CI runner takes 50.
+A prebuilt package from the releases page avoids it entirely; `install.sh` fetches and
+verifies one.
 
 **Can I use the `infinity-sdk` from PyPI?**
 Yes. The server speaks the same protocol as upstream 0.7.3, so the published SDK works

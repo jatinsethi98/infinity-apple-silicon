@@ -24,7 +24,7 @@ on arm64 is the **only** supported platform and the build refuses anything else.
 
 ```sh
 make doctor        # prerequisites, changes nothing
-make setup         # toolchain + vcpkg + server build (about an hour first time)
+make setup         # toolchain + vcpkg + server build (10 to 15 minutes on an M4, first time)
 make build         # rebuild the server;  make build-tests adds test_main
 make start | stop | status | logs
 make test          # C++ unit tests

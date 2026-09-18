@@ -31,8 +31,9 @@
 #   --with-tests        also build test_main and install sqllogictest
 #   -h, --help          this message
 #
-# The build itself takes roughly an hour on first run (vcpkg dependencies, then
-# about 1500 C++23 module translation units) and needs ~25 GB of free disk.
+# The build takes about 12 minutes on an M4 Mac mini (six for the vcpkg dependencies,
+# three for about 1500 C++23 module translation units, the rest for the unit tests),
+# longer on older chips, and needs about 20 GB of free disk.
 #
 set -euo pipefail
 
@@ -80,10 +81,11 @@ export SDKROOT=${SDKROOT:-$(xcrun --show-sdk-path)}
 info "macOS $(sw_vers -productVersion) on $(sysctl -n machdep.cpu.brand_string)"
 info "SDKROOT=$SDKROOT"
 
-# ~11 GB of build tree, ~2.5 GB of vcpkg checkout, ~8 GB of vcpkg build trees.
+# Measured on an M4 mini: 11 GB of build tree, 2 GB of vcpkg checkout and build trees,
+# and a few GB for the dictionary submodule, instances and the package; 19 GB in all.
 free_gb=$(df -g . | awk 'NR==2 {print $4}')
-if (( free_gb < 25 )); then
-    info "warning: only ${free_gb} GB free on this volume; the full build needs about 25 GB"
+if (( free_gb < 20 )); then
+    info "warning: only ${free_gb} GB free on this volume; the full build needs about 20 GB"
 fi
 
 # --------------------------------------------------------- 2. Homebrew toolchain
@@ -253,7 +255,7 @@ fi
 targets=(infinity)
 (( with_tests )) && targets+=(test_main)
 
-step "Building ${targets[*]} (this takes about an hour on first run)"
+step "Building ${targets[*]} (about 12 minutes on an M4; longer on older chips)"
 info "progress is written to build/macos-arm64-release-build.log"
 scripts/apple_silicon/build_server.sh macos-arm64-release "${targets[@]}"
 

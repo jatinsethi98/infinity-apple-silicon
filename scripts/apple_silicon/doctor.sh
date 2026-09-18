@@ -75,10 +75,10 @@ else
 fi
 
 free_gb=$(df -g . | awk 'NR==2 {print $4}')
-if (( free_gb >= 25 )); then
+if (( free_gb >= 20 )); then
     ok "disk" "${free_gb} GB free on this volume"
 else
-    warn "disk" "${free_gb} GB free; the full server build needs about 25 GB, the benchmark harness about 2 GB"
+    warn "disk" "${free_gb} GB free; the full server build needs about 20 GB, the benchmark harness about 2 GB"
 fi
 
 # -------------------------------------------------------------- toolchain
@@ -188,7 +188,7 @@ server=build/macos-arm64-release/src/infinity
 if [[ -x $server ]]; then
     ok "server binary" "$server ($(lipo -archs "$server" 2>/dev/null || printf '?'))"
 else
-    info "server binary" "not built yet:  make setup   (about an hour on first run)"
+    info "server binary" "not built yet:  make setup   (10 to 15 minutes on an M4)"
 fi
 
 if [[ -x build/macos-arm64-release/src/test_main ]]; then

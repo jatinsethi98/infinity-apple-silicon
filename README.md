@@ -37,14 +37,15 @@ git clone --recurse-submodules https://github.com/jatinsethi98/infinity-apple-si
 cd infinity-apple-silicon
 
 make doctor   # checks prerequisites and changes nothing
-make setup    # toolchain, dependencies and the server build: about an hour, 25 GB
+make setup    # toolchain, dependencies and the server build: ~12 min on an M4, 20 GB
 make start    # server on 127.0.0.1 (ports 23817 SDK, 23820 HTTP, 5432 Postgres)
 make demo     # hybrid search over 36 articles, with the results explained
 ```
 
-`make` with no arguments lists every target. The build is long because it compiles
-roughly 1,500 C++23 module units; it is safe to interrupt and re-run, and every step it
-has already done is skipped.
+`make` with no arguments lists every target. The build compiles roughly 1,500 C++23
+module units plus thirty dependencies; measured at 12 minutes on an M4 Mac mini, longer
+on older chips. It is safe to interrupt and re-run, and every step it has already done
+is skipped.
 
 **Prebuilt package.** Once the first tagged release is published, `install.sh` downloads
 it, verifies its checksum and links `infinity` into `~/.local/bin`:

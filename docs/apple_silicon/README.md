@@ -69,7 +69,7 @@ scripts/apple_silicon/build_faiss_accelerate.sh   # -> build/bench-faiss-src/fai
 FAISS 1.15 enables a Metal GPU backend by default on Apple Silicon, which needs the Xcode Metal
 toolchain; the script turns it off because the comparison is CPU HNSW.
 
-## Building the full server (about an hour, needs vcpkg)
+## Building the full server (10 to 15 minutes on an M4, needs vcpkg)
 
 The short way, which does everything below and is safe to re-run:
 

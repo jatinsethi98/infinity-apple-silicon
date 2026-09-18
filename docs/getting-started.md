@@ -11,8 +11,8 @@ prints `--help`.
 | Mac | Any Apple Silicon Mac (M1 or later). 16 GB of memory is comfortable; 8 GB builds, slowly. |
 | macOS | 14 (Sonoma) or newer. |
 | Tools | [Homebrew](https://brew.sh) and the Xcode command line tools: `xcode-select --install`. |
-| Disk | About 25 GB free for a source build (the build tree alone is 11 GB). A prebuilt package needs about 150 MB. |
-| Time | About an hour for the first source build. Minutes for a package. |
+| Disk | About 20 GB free for a source build (the build tree alone is 11 GB, vcpkg 2 GB). A prebuilt package needs about 150 MB. |
+| Time | About 12 minutes for a source build on an M4 Mac mini, measured; longer on older chips or slow networks. Under a minute for a package. |
 
 Check all of it in one go. This changes nothing on your machine:
 
@@ -35,20 +35,20 @@ make setup
 `make setup` runs `scripts/apple_silicon/setup.sh`, which:
 
 1. checks the host is arm64 macOS with the Xcode tools,
-2. installs the Homebrew toolchain: LLVM 20, CMake, Ninja, libomp and bison,
+2. installs the Homebrew toolchain: LLVM 20, CMake, Ninja, libomp, bison and pkg-config,
 3. fetches the `resource` submodule (about 500 MB of full-text analyzer dictionaries)
    if `--recurse-submodules` was forgotten,
 4. clones [vcpkg](https://github.com/microsoft/vcpkg) next to the repository at the
    exact baseline pinned in `vcpkg.json` and bootstraps it,
-5. builds the server. Dependencies come first (about 20 minutes), then roughly 1,500
-   C++23 module translation units.
+5. builds the server. Dependencies come first (about 6 minutes on an M4), then
+   roughly 1,500 C++23 module translation units (about 3 minutes on all ten cores).
 
 It is safe to interrupt and re-run: each step is skipped once done. Useful options:
 
 ```sh
 scripts/apple_silicon/setup.sh --with-tests   # also build the unit tests and install sqllogictest
 scripts/apple_silicon/setup.sh --no-build     # prerequisites only
-scripts/apple_silicon/setup.sh --skip-brew    # you provide clang 20, cmake, ninja, libomp, bison
+scripts/apple_silicon/setup.sh --skip-brew    # you provide clang 20, cmake, ninja, libomp, bison, pkg-config
 scripts/apple_silicon/setup.sh --vcpkg-root ~/src/vcpkg
 ```
 
@@ -182,6 +182,7 @@ What each of those proves, and what none of them cover, is recorded in
 | Symptom | Cause and fix |
 |---|---|
 | `make doctor` says `bison 2.3 ... too old` | macOS ships an old bison and the thrift dependency needs 3.7+. `brew install bison`. |
+| `Could not find pkg-config` while building abseil | vcpkg's ports need it and macOS ships none. `brew install pkg-config`; `make doctor` checks for it. |
 | `cmake ... is too old` or `import std` errors | CMake must be 4.0.3 or newer and below 4.5: `brew upgrade cmake`. |
 | `cmake ... newer than this build supports` | Install a supported one alongside: `brew unlink cmake && brew install cmake@4.4`. |
 | `no clang++ at /opt/homebrew/opt/llvm@20/bin` | Apple Clang cannot build this. `brew install llvm@20`. |
@@ -192,7 +193,7 @@ What each of those proves, and what none of them cover, is recorded in
 | Analyzer or CJK full-text tests fail | The `resource` submodule is missing: `git submodule update --init --recursive resource`. |
 | `uname -m` says `x86_64` on an M-series Mac | You are in a Rosetta shell. `arch -arm64 zsh`. |
 | A second server dies right after "started" | Port collision, including the peer port 23850. Use `make start INSTANCE=two` with `--port-offset`; see [Operations](guides/operations.md). |
-| The disk filled up mid-build | The build tree is 11 GB and vcpkg's build trees another 8 GB. Free 25 GB and re-run `make setup`; it resumes. |
+| The disk filled up mid-build | The build tree is 11 GB and vcpkg another 2 GB, plus the dictionaries and instances. Free 20 GB and re-run `make setup`; it resumes. |
 
 Server logs are at `build/instances/<name>/log/infinity.log` for a checkout and
 `<data-dir>/log/infinity.log` for a package. Build logs are at

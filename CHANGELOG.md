@@ -25,6 +25,8 @@ not here. Versions will follow `v0.7.3-apple.N` until the port and upstream conv
   options were misspelled (`bm25_params`) and silently ignored; corrected.
 - `make bench` refuses to run without the Accelerate-linked FAISS reference instead
   of silently falling back to the Homebrew build that flatters Infinity.
+- The build-time and disk figures were measured on an M4 Mac mini during the local
+  integration run: about 12 minutes and 20 GB, not the hour and 25 GB the docs said.
 
 ### Documentation
 
