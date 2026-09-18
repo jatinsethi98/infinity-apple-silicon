@@ -1,0 +1,57 @@
+name: lint
+
+# Fast checks that need no macOS runner and no build: shell scripts parse and pass
+# shellcheck, every relative link and anchor in the Markdown resolves, and the Python
+# helpers at least compile. Runs on every push and pull request in a couple of
+# minutes on a Linux runner, so a typo in a doc or a script is caught long before the
+# hour-long native build in macos_arm64.yml gets to it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts-and-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell scripts parse
+        run: |
+          set -eux
+          for f in install.sh scripts/apple_silicon/*.sh scripts/bench/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: Shellcheck
+        run: |
+          set -eux
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --version
+          # -S warning: style notes are not a reason to block a change; warnings are.
+          shellcheck -S warning install.sh scripts/apple_silicon/*.sh
+
+      - name: Python helpers compile
+        run: |
+          set -eux
+          python3 -m py_compile scripts/check_md_links.py scripts/apple_silicon/run_slt.py \
+            scripts/bench/*.py demo/hybrid_search_demo.py test/eval_macos/harness.py
+
+      - name: Markdown links and anchors resolve
+        run: python3 scripts/check_md_links.py
+
+      - name: Workflow files are valid YAML
+        run: |
+          set -eux
+          python3 -c 'import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]' \
+            .github/workflows/*.yml .github/ISSUE_TEMPLATE/*.yml .github/dependabot.yml
