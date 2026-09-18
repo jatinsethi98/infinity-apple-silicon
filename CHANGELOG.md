@@ -47,7 +47,10 @@ not here. Versions will follow `v0.7.3-apple.N` until the port and upstream conv
 - Fixed the native macOS workflow's first run: the hosted runner has no Homebrew
   bison, so vcpkg's thrift port fell back to Xcode's bison 2.3, which rejects the
   `--file-prefix-map` flag thrift passes. The workflows, `setup.sh`,
-  `build_server.sh` and `doctor.sh` now all install or check for bison 3.7+.
+  `build_server.sh` and `doctor.sh` now all install or check for bison 3.7+. With that
+  and the `from_chars` fix above, the workflow went green for the first time on
+  2026-09-18 (run 35317365990: build, unit tests, SQL suite, crash recovery and the
+  package self-test, 50 minutes cold).
 - A `lint` workflow on a Linux runner: shell syntax, shellcheck, Python compilation,
   Markdown links and YAML validity, in a couple of minutes.
 - Dependabot for GitHub Actions versions.

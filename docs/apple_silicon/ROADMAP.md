@@ -19,7 +19,7 @@
 | Input validation | **Eleven blockers**, four crashes and seven silent wrong answers | [EVALUATION.md](EVALUATION.md); summary in [known issues](../known-issues.md) |
 | Packaging: relocatable arm64 tarball with checksum, and an installer | Done, self-tested | `make package`, `install.sh` |
 | Packaging: Homebrew formula, arm64 embedded Python wheel | Not started | the shipped wheel is the pure-Python remote SDK |
-| macOS CI: build, unit tests, SQL suite, recovery, package | Written; first hosted run failed on a missing bison, fixed | `.github/workflows/macos_arm64.yml` |
+| macOS CI: build, unit tests, SQL suite, recovery, package | **Green** on a hosted `macos-15` runner, 2026-09-18 | `.github/workflows/macos_arm64.yml`, run 35317365990 |
 | Lint CI: shell, links, YAML | Done | `.github/workflows/lint.yml` |
 | HTTP API on macOS | One end-to-end suite, 38/40 | `test/eval_macos/test_http_api_e2e.py` |
 | Cluster mode on macOS | Not tested | two standalone instances side by side do work |
@@ -34,31 +34,28 @@ to run, not one to trust with data you cannot regenerate.
 
 In the order they unblock each other.
 
-1. **A green macOS CI run.** The workflow exists and its first hosted run died in the
-   dependency stage on the runner's bison 2.3; that is fixed. The first green run is
-   the point at which everything above becomes protected against regression, and the
-   point at which a release can be cut.
-2. **First tagged release.** `v0.7.3-apple.1`: the tarball, its checksum, and
-   `install.sh` pointing at it, so a fresh Mac gets a server in a minute instead of an
-   hour.
-3. **The eleven blockers**, crashes first. Each has a fix direction in
+1. **First tagged release.** CI is green as of 2026-09-18, so everything above is
+   protected against regression and a release can be cut: `v0.7.3-apple.1`, the
+   tarball and its checksum attached, and `install.sh` pointing at it, so a fresh Mac
+   gets a server in a minute instead of an hour.
+2. **The eleven blockers**, crashes first. Each has a fix direction in
    [EVALUATION.md](EVALUATION.md) and a failing regression test in
    `test/eval_macos/test_server_crash_regressions.py`. The always-true/always-false
    predicate crash (blocker 1) and the corrupt-WAL deletion (blocker 5) are the two
    that bite ordinary use.
-4. **The two engine-side unit-test failures.** The PGM `long double` overflow needs
+3. **The two engine-side unit-test failures.** The PGM `long double` overflow needs
    the vendored arithmetic reformulated so it cannot overflow where `long double` is
    64-bit; the low-cardinality index test needs its key type corrected.
-5. **HTTP API parity.** The SQL logic tests drive only the PostgreSQL path; extend
+4. **HTTP API parity.** The SQL logic tests drive only the PostgreSQL path; extend
    the end-to-end HTTP suite to cover what they cover.
-6. **Homebrew formula.** Once releases exist, a tap that installs the tarball, so
+5. **Homebrew formula.** Once releases exist, a tap that installs the tarball, so
    `brew install` is the install command.
-7. **Upstream pull requests.** The float parse, the test-harness portability fixes,
+6. **Upstream pull requests.** The float parse, the test-harness portability fixes,
    the resource resolver, and the two storage fixes are platform-independent and
    belong in infiniflow/infinity now. The toolchain, triplet, platform gating and SIMD
    dispatch follow behind portability gates, because this fork removed Linux and
    upstream must not.
-8. **RAGFlow on Apple Silicon.** With Infinity native, an ARM64 RAGFlow setup that
+7. **RAGFlow on Apple Silicon.** With Infinity native, an ARM64 RAGFlow setup that
    uses Infinity as its document engine instead of Elasticsearch, which RAGFlow
    currently lists as unsupported.
 
