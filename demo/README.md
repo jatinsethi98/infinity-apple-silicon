@@ -69,6 +69,7 @@ uv run --with fastembed demo/hybrid_search_demo.py --ask "how do I tune recall"
 |---|---|
 | `hybrid_search_demo.py` | The demo. Roughly 150 lines of Python against the Infinity SDK. |
 | `corpus.json` | 36 articles: `doc_id`, `title`, `body`, `category`, `year`, `reading_minutes`. |
+| `rag_quickstart.py` | The retrieval half of a RAG app over your own files: chunk, embed, store, hybrid-retrieve, print a prompt. Walkthrough in [docs/guides/rag.md](../docs/guides/rag.md). |
 
 ## Notes
 
